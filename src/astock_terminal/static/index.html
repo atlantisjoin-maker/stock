@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#b5121b">
+  <title>A股智能投研网页版</title>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<div id="authGate" class="auth-gate" hidden>
+  <section class="auth-panel">
+    <div class="brand auth-brand">
+      <span class="logo">A</span>
+      <div><b>A股智能投研</b><small>个人账户登录</small></div>
+    </div>
+    <p class="auth-copy">每个账户只显示自己的持仓、观察池和资金设置。新账户进入持仓页为空，可自行导入和维护。</p>
+    <form id="authForm" class="auth-form">
+      <label>用户名<input name="username" autocomplete="username" required minlength="3" maxlength="32"></label>
+      <label>密码<input name="password" type="password" autocomplete="current-password" required minlength="8"></label>
+      <div id="authMessage" class="notice"></div>
+      <div class="row-actions">
+        <button class="primary" name="mode" value="login">登录</button>
+        <button name="mode" value="register">创建账户</button>
+      </div>
+    </form>
+  </section>
+</div>
+
+<div id="appShell" class="app-shell" hidden>
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="logo">A</span>
+      <div><b>A股智能投研</b><small>WEB TERMINAL V4.1</small></div>
+    </div>
+    <nav>
+      <button class="nav active" data-page="dashboard" data-short="总览">投资总览</button>
+      <button class="nav" data-page="market" data-short="行情">行情中心</button>
+      <button class="nav" data-page="selection" data-short="选股">选股系统</button>
+      <button class="nav" data-page="fund" data-short="基金">基金研究</button>
+      <button class="nav" data-page="portfolio" data-short="持仓">持仓管理</button>
+      <button class="nav" data-page="news" data-short="新闻">新闻热点</button>
+      <button class="nav" data-page="alerts" data-short="预警">预警中心</button>
+      <button class="nav" data-page="settings" data-short="设置">系统设置</button>
+    </nav>
+    <div class="side-status"><span id="serverDot" class="dot"></span><span id="serverText">连接中</span></div>
+  </aside>
+
+  <section class="workspace">
+    <header class="topbar">
+      <div class="ticker"><b>数据纪律</b><span>行情、新闻和市场信号均需标明来源；单一信号不构成买入建议</span></div>
+      <div class="actions"><span id="currentUser"></span><span id="clock"></span><button id="logoutBtn">退出</button><button id="refreshBtn" class="primary">刷新全部数据源</button></div>
+    </header>
+
+    <main>
+      <section class="page active" id="page-dashboard">
+        <div class="page-title">
+          <div><h1>投资总览</h1><p>行情、选股、持仓、新闻和风险合并展示</p></div>
+          <a class="ghost" href="/api/report" target="_blank">导出日报</a>
+        </div>
+        <div id="dataGuide" class="status-strip"></div>
+        <div class="metrics">
+          <div class="metric"><span>观察池</span><b id="mWatch">0</b></div>
+          <div class="metric"><span>持仓数量</span><b id="mPositions">0</b></div>
+          <div class="metric"><span>组合仓位</span><b id="mWeight">0%</b></div>
+          <div class="metric"><span>浮动盈亏</span><b id="mPnl">¥0</b></div>
+          <div class="metric"><span>候选线索</span><b id="mCandidates">0</b></div>
+          <div class="metric"><span>活动提醒</span><b id="mAlerts">0</b></div>
+        </div>
+        <div class="grid two">
+          <article class="panel"><header><h2>重点候选</h2><span>官方评分或市场热度线索</span></header><div id="dashboardCandidates"></div></article>
+          <article class="panel"><header><h2>风险提醒</h2><span>失败关闭，不生成虚假信号</span></header><div id="dashboardAlerts"></div></article>
+        </div>
+        <div class="grid two">
+          <article class="panel"><header><h2>持仓概览</h2><span>按已验证行情估值</span></header><div id="dashboardPortfolio"></div></article>
+          <article class="panel"><header><h2>数据源状态</h2><span>实时健康检查</span></header><div id="dashboardSources"></div></article>
+        </div>
+      </section>
+
+      <section class="page" id="page-market">
+        <div class="page-title"><div><h1>行情中心</h1><p>腾讯财经和 mootdx 交叉验证，缓存最近可用数据</p></div></div>
+        <article class="panel controls">
+          <label>观察池代码<input id="watchInput" placeholder="600000,000001,300750"></label>
+          <button id="saveWatch">保存观察池</button>
+          <button id="starterWatch">载入基础观察池</button>
+          <button id="marketRefresh" class="primary">立即刷新行情</button>
+        </article>
+        <article class="panel"><header><h2>行情验证</h2><span>单源行情仅用于展示，不生成强买入信号</span></header><div id="quoteTable"></div></article>
+      </section>
+
+      <section class="page" id="page-selection">
+        <div class="page-title">
+          <div><h1>选股系统</h1><p>官方基金季报数据优先；无官方数据时仅展示市场热度线索</p></div>
+          <button id="fundSyncBtn" class="ghost">刷新市场信号</button>
+        </div>
+        <div id="selectionStatus" class="notice"></div>
+        <div class="grid two">
+          <article class="panel"><header><h2>高分基金经理</h2><span>仅显示有来源状态的数据</span></header><div id="managerTable"></div></article>
+          <article class="panel"><header><h2>机构共同增持</h2><span>独立经理与基金公司去重</span></header><div id="consensusTable"></div></article>
+        </div>
+        <article class="panel"><header><h2>股票综合排名</h2><span>区分官方评分和 a-stock-data 市场线索</span></header><div id="stockScoreTable"></div></article>
+      </section>
+
+      <section class="page" id="page-fund">
+        <div class="page-title">
+          <div><h1>基金研究</h1><p>基金经理评分、季度报告、增持共识、交易计划和产业链剖析</p></div>
+          <div class="row-actions"><button id="fundReportSyncBtn" class="primary">同步基金季报</button><button id="valuationRefreshBtn" class="ghost">刷新估值</button><a class="ghost" href="/api/fund/research-report" target="_blank">导出专业报告</a></div>
+        </div>
+        <article class="panel controls fund-sync-controls">
+          <label>基金代码<input id="fundCodeInput" placeholder="410007, 000001"></label>
+          <label>报告数量<input id="fundMaxReports" type="number" min="1" max="12" value="4"></label>
+          <label>发现数量<input id="fundDiscoverLimit" type="number" min="1" max="80" value="10"></label>
+          <label>报告年度<input id="fundReportYears" placeholder="留空自动回溯，可填 2026,2025"></label>
+          <label class="check"><input id="fundDiscoverLatest" type="checkbox" checked>自动发现官方最新季报</label>
+        </article>
+        <div id="fundResearchStatus" class="notice"></div>
+        <div class="grid two">
+          <article class="panel"><header><h2>高分基金经理</h2><span>经理×产品×任期×证据</span></header><div id="fundManagerRank"></div></article>
+          <article class="panel"><header><h2>季度报告</h2><span>官方披露与解析状态</span></header><div id="fundReportTable"></div></article>
+        </div>
+        <article class="panel"><header><h2>新增/增持股票交易计划</h2><span>多基金共识、行情验证、仓位上限</span></header><div id="fundTradePlans"></div></article>
+        <article class="panel"><header><h2>产业链剖析</h2><span>上游、中游、下游、催化和验证问题</span></header><div id="industryChainView"></div></article>
+      </section>
+
+      <section class="page" id="page-portfolio">
+        <div class="page-title"><div><h1>持仓管理</h1><p>仓位、成本、盈亏、止损和题材集中度</p></div></div>
+        <div class="grid two">
+          <article class="panel"><header><h2>当前持仓</h2><span>SQLite 本地保存</span></header><div id="portfolioSummary"></div><div id="positionTable"></div></article>
+          <article class="panel">
+            <header><h2>新增或更新持仓</h2><span>不会自动下单</span></header>
+            <form id="positionForm" class="form">
+              <label>类型<select name="asset_type"><option value="stock">股票</option><option value="fund">基金/ETF</option><option value="gold">黄金</option><option value="wealth">理财</option><option value="other">其他</option></select></label>
+              <label>代码<input name="symbol" required></label>
+              <label>名称<input name="name"></label>
+              <label>行业/题材<input name="theme" value="未分类"></label>
+              <label>数量<input name="quantity" type="number" min="1" required></label>
+              <label>平均成本<input name="average_cost" type="number" step="0.01" required></label>
+              <label>现价/净值<input name="current_price" type="number" step="0.0001"></label>
+              <label>止损价<input name="stop_price" type="number" step="0.01"></label>
+              <label>目标价<input name="take_profit_price" type="number" step="0.01"></label>
+              <label>综合得分<input name="score" type="number" min="0" max="100" value="50"></label>
+              <label class="wide">备注<input name="note"></label>
+              <button class="primary">保存持仓</button>
+            </form>
+          </article>
+        </div>
+        <article class="panel">
+          <header><h2>持仓截图识别</h2><span>支持图片 OCR 和文本粘贴，导入前需人工确认</span></header>
+          <div class="ocr-grid">
+            <label>截图文件<input id="positionScreenshot" type="file" accept="image/*"></label>
+            <label class="wide">OCR 文本<textarea id="positionOcrText" placeholder="可粘贴券商持仓表文本，例如：600519 贵州茅台 100 1500.25"></textarea></label>
+          </div>
+          <div class="row-actions"><button id="recognizePositions" class="primary">识别持仓</button><button id="importRecognized" disabled>确认导入</button></div>
+          <div id="ocrResult" class="ocr-result"></div>
+        </article>
+        <article class="panel">
+          <header><h2>新建仓位计算器</h2><span>风险预算与证据门槛</span></header>
+          <form id="sizingForm" class="form sizing">
+            <label>总资金<input name="total_capital" type="number" value="100000"></label>
+            <label>已投入<input name="current_invested" type="number" value="0"></label>
+            <label>题材已投入<input name="current_theme_exposure" type="number" value="0"></label>
+            <label>个股已投入<input name="current_stock_exposure" type="number" value="0"></label>
+            <label>入场价<input name="entry_price" type="number" step="0.01" value="10"></label>
+            <label>止损价<input name="stop_price" type="number" step="0.01" value="9.4"></label>
+            <label>综合得分<input name="score" type="number" value="75"></label>
+            <label>风险模式<select name="risk_profile"><option value="conservative">稳健</option><option value="balanced" selected>均衡</option><option value="aggressive">进取</option></select></label>
+            <label>行情验证<select name="quote_validation"><option>OK</option><option>WARN</option><option selected>BLOCK</option></select></label>
+            <label>新闻验证<select name="news_verification"><option>CONFIRMED</option><option>HIGH_CONFIDENCE</option><option>PENDING</option><option selected>UNVERIFIED</option></select></label>
+            <label class="check"><input name="is_new_theme" type="checkbox" checked>新题材</label>
+            <button class="primary">计算</button>
+          </form>
+          <div id="sizingResult"></div>
+        </article>
+      </section>
+
+      <section class="page" id="page-news">
+        <div class="page-title"><div><h1>新闻热点</h1><p>接入东财全球资讯与个股新闻，来源状态可追踪</p></div><button id="newsRefresh" class="primary">刷新新闻源</button></div>
+        <article class="panel"><header><h2>事件流</h2><span>无可靠来源时保持空白</span></header><div id="newsList"></div></article>
+      </section>
+
+      <section class="page" id="page-alerts">
+        <div class="page-title"><div><h1>预警中心</h1><p>风险、机会、行情异常与通知</p></div></div>
+        <article class="panel"><header><h2>活动提醒</h2><span>人工确认后标记已读</span></header><div id="alertList"></div></article>
+      </section>
+
+      <section class="page" id="page-settings">
+        <div class="page-title"><div><h1>系统设置</h1><p>组合风险与通知通道</p></div></div>
+        <div class="grid two">
+          <article class="panel">
+            <header><h2>组合设置</h2></header>
+            <form id="settingsForm" class="form">
+              <label>总资金<input name="total_capital" type="number"></label>
+              <label>风险模式<select name="risk_profile"><option value="conservative">稳健</option><option value="balanced">均衡</option><option value="aggressive">进取</option></select></label>
+              <label>默认止损比例<input name="default_stop_loss_pct" type="number" step="0.01"></label>
+              <label>机会最低分<input name="opportunity_min_score" type="number"></label>
+              <label>机会最高风险分<input name="opportunity_max_risk" type="number"></label>
+              <label>市场环境<select name="market_regime"><option value="defensive">防御</option><option value="neutral">中性</option><option value="risk_on">偏强</option></select></label>
+              <label class="check"><input name="notifications_enabled" type="checkbox">开启通知</label>
+              <button class="primary">保存设置</button>
+            </form>
+          </article>
+          <article class="panel">
+            <header><h2>通知测试</h2><span>密钥只写入 config.json</span></header>
+            <select id="notifyChannel"><option value="">全部已配置通道</option><option value="wecom">企业微信</option><option value="dingtalk">钉钉</option><option value="feishu">飞书</option><option value="telegram">Telegram</option><option value="generic">通用 Webhook</option></select>
+            <textarea id="notifyMessage">A股智能投研网页版通知测试。</textarea>
+            <button id="notifyTest" class="primary">发送测试</button>
+            <div class="notice">个人微信没有通用官方机器人接口；建议使用企业微信、钉钉或飞书。</div>
+          </article>
+        </div>
+      </section>
+    </main>
+  </section>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,61 @@
+{
+  "host": "127.0.0.1",
+  "port": 8765,
+  "bootstrap_watchlist": ["510300", "510500", "159915", "588000", "512100"],
+  "refresh_seconds": 10,
+  "quote_stale_seconds": 20,
+  "quote_retry_count": 2,
+  "quote_batch_size": 60,
+  "price_warn_deviation": 0.002,
+  "price_block_deviation": 0.005,
+  "mootdx_server": "",
+  "rss_sources": [],
+  "json_news_sources": [],
+  "news_timeout_seconds": 8,
+  "news_retry_count": 2,
+  "a_stock_data": {
+    "enabled": true,
+    "eastmoney_min_interval": 1.2,
+    "news_enabled": true,
+    "global_news_page_size": 30,
+    "stock_news_symbols": 5,
+    "stock_news_page_size": 5,
+    "signal_enabled": true,
+    "hot_rank_top": 30,
+    "signal_watchlist_limit": 10,
+    "valuation_enabled": true,
+    "valuation_lookback_days": 1095,
+    "valuation_symbol_limit": 40,
+    "undervalued_percentile": 35,
+    "background_refresh": true,
+    "news_refresh_seconds": 120,
+    "signal_refresh_seconds": 300,
+    "valuation_refresh_seconds": 3600
+  },
+  "fund_report_sync": {
+    "enabled": false,
+    "fund_codes": [],
+    "discover_latest": false,
+    "discover_latest_limit": 20,
+    "max_reports_per_fund": 4,
+    "report_years": [],
+    "parse_pdf": true,
+    "official_min_interval": 0.6,
+    "structured_json_sources": [],
+    "check_interval_seconds": 86400,
+    "report_months": [1, 4, 7, 10],
+    "evidence_required": true
+  },
+  "ocr": {
+    "tesseract_cmd": "",
+    "languages": "chi_sim+eng"
+  },
+  "notification": {
+    "wecom_webhook": "",
+    "dingtalk_webhook": "",
+    "feishu_webhook": "",
+    "telegram_bot_token": "",
+    "telegram_chat_id": "",
+    "generic_webhook": ""
+  }
+}

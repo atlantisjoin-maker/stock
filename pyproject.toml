@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "a-stock-intelligence-web"
+version = "4.1.0"
+description = "A股多源交叉验证、选股、持仓与风险预警网页版"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "Project Maintainers"}]
+dependencies = []
+
+[project.optional-dependencies]
+market = [
+  "mootdx==0.11.7",
+  "httpx==0.25.2",
+  "httpcore==1.0.9"
+]
+dev = ["build>=1.2", "twine>=5"]
+ocr = [
+  "Pillow>=10",
+  "pytesseract>=0.3.10"
+]
+fund = [
+  "pdfplumber>=0.11",
+  "pypdf>=4"
+]
+
+[project.scripts]
+astock-web = "astock_terminal.app:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+astock_terminal = ["static/*"]

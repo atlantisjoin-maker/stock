@@ -1,0 +1,66 @@
+{
+  "managers": [
+    {
+      "manager_id": "manager-official-id",
+      "name": "基金经理姓名",
+      "company": "基金公司",
+      "score": 78,
+      "tenure_years": 5.2,
+      "report_period": "2026Q1",
+      "source_url": "官方披露或基金公司URL",
+      "evidence_status": "VERIFIED"
+    }
+  ],
+  "products": [
+    {
+      "fund_code": "000001",
+      "name": "基金产品名称",
+      "company": "基金公司",
+      "manager_id": "manager-official-id",
+      "manager_name": "基金经理姓名",
+      "category": "主动权益",
+      "strategy_track": "S2",
+      "benchmark": "业绩比较基准",
+      "asset_size": 120.5,
+      "fee_rate": 0.015,
+      "source_url": "官方产品资料URL",
+      "evidence_status": "VERIFIED"
+    }
+  ],
+  "reports": [
+    {
+      "report_id": "fund-000001-2026Q1",
+      "fund_code": "000001",
+      "fund_name": "基金产品名称",
+      "manager_id": "manager-official-id",
+      "manager_name": "基金经理姓名",
+      "company": "基金公司",
+      "report_period": "2026Q1",
+      "report_type": "quarterly",
+      "announcement_date": "2026-04-22",
+      "source_url": "官方季报PDF或公告URL",
+      "pdf_sha256": "可选PDF哈希",
+      "parser_status": "IMPORTED",
+      "coverage": 1.0,
+      "evidence_status": "VERIFIED"
+    }
+  ],
+  "holdings": [
+    {
+      "report_id": "fund-000001-2026Q1",
+      "symbol": "600000",
+      "name": "股票名称",
+      "industry": "行业",
+      "holding_rank": 1,
+      "market_value": 120000000,
+      "nav_ratio": 0.082,
+      "shares": 10000000,
+      "previous_shares": 8000000,
+      "change_shares": 2000000,
+      "change_ratio": 0.25,
+      "holding_status": "INCREASE",
+      "source_page": "PDF第42页",
+      "evidence_status": "VERIFIED"
+    }
+  ]
+}

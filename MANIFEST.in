@@ -1,0 +1,3 @@
+recursive-include src/astock_terminal/static *
+include VERSION
+include config.example.json
