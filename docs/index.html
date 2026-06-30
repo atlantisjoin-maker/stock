@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="A股智能投研网页版：行情、基金季报、截图持仓识别、低估值观察和多账户隔离。">
+  <title>A股智能投研网页版</title>
+  <style>
+    :root {
+      --bg: #0f1216;
+      --panel: #171c23;
+      --panel-2: #20262e;
+      --line: #303842;
+      --text: #eef2f6;
+      --muted: #a4aeb9;
+      --red: #d83b45;
+      --green: #34c27a;
+      --blue: #5b9ce6;
+      --amber: #d8a338;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Microsoft YaHei", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.65;
+    }
+    a { color: inherit; }
+    .top {
+      min-height: 92vh;
+      display: grid;
+      align-items: center;
+      padding: 28px;
+    }
+    .wrap {
+      width: min(1120px, 100%);
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 0.92fr 1.08fr;
+      gap: 34px;
+      align-items: center;
+    }
+    .brand {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      color: var(--muted);
+      margin-bottom: 26px;
+    }
+    .logo {
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      border-radius: 8px;
+      background: var(--red);
+      color: #fff;
+      font-size: 24px;
+      font-weight: 800;
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(34px, 6vw, 68px);
+      line-height: 1.08;
+      letter-spacing: 0;
+    }
+    .lead {
+      margin: 22px 0 0;
+      color: var(--muted);
+      font-size: 18px;
+      max-width: 640px;
+    }
+    .actions {
+      margin-top: 30px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 44px;
+      padding: 0 18px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      text-decoration: none;
+      font-weight: 700;
+      background: var(--panel-2);
+    }
+    .btn.primary {
+      border-color: var(--red);
+      background: var(--red);
+      color: #fff;
+    }
+    .points {
+      margin-top: 28px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .points span {
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.025);
+      border-radius: 6px;
+      padding: 10px 12px;
+    }
+    .screen {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #12171d;
+      overflow: hidden;
+      box-shadow: 0 24px 70px rgba(0,0,0,0.34);
+    }
+    .bar {
+      height: 42px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line);
+      background: #171c23;
+    }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--red); }
+    .dot:nth-child(2) { background: var(--amber); }
+    .dot:nth-child(3) { background: var(--green); }
+    .dash {
+      display: grid;
+      grid-template-columns: 160px 1fr;
+      min-height: 520px;
+    }
+    .nav {
+      border-right: 1px solid var(--line);
+      background: #15181e;
+      padding: 16px 10px;
+    }
+    .nav b {
+      display: block;
+      margin: 0 8px 12px;
+      font-size: 13px;
+    }
+    .nav span {
+      display: block;
+      color: var(--muted);
+      padding: 9px 10px;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+    .nav span.active {
+      background: #251d21;
+      color: #fff;
+      box-shadow: inset 3px 0 0 var(--red);
+    }
+    .content { padding: 18px; }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .metric, .card {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel);
+      padding: 14px;
+    }
+    .metric span, .card small {
+      color: var(--muted);
+      display: block;
+      font-size: 12px;
+    }
+    .metric b { display: block; margin-top: 6px; font-size: 24px; }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .table {
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      padding: 10px 12px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .row:first-child {
+      border-top: 0;
+      background: #20262e;
+      color: var(--text);
+      font-weight: 700;
+    }
+    .tag { color: var(--green); }
+    .risk { color: var(--amber); }
+    .section {
+      border-top: 1px solid var(--line);
+      padding: 34px 28px 42px;
+    }
+    .section .inner {
+      width: min(1120px, 100%);
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .feature {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 18px;
+    }
+    .feature h2 { margin: 0 0 8px; font-size: 18px; }
+    .feature p { margin: 0; color: var(--muted); }
+    .footer {
+      color: var(--muted);
+      text-align: center;
+      padding: 22px;
+      border-top: 1px solid var(--line);
+    }
+    @media (max-width: 860px) {
+      .top { padding: 18px; }
+      .wrap, .section .inner { grid-template-columns: 1fr; }
+      .points, .grid, .metrics { grid-template-columns: 1fr; }
+      .dash { grid-template-columns: 1fr; }
+      .nav { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="top">
+    <div class="wrap">
+      <section>
+        <div class="brand"><span class="logo">A</span><span>A股智能投研 WEB TERMINAL</span></div>
+        <h1>面向个人投资者的本地 A 股投研工作台</h1>
+        <p class="lead">整合实时行情、公开基金季报、股票估值代理、截图持仓识别、仓位提示和多账户隔离。源码公开，个人持仓只保存在自己的运行环境。</p>
+        <div class="actions">
+          <a class="btn primary" href="https://github.com/atlantisjoin-maker/stock" target="_blank" rel="noreferrer">查看项目源码</a>
+          <a class="btn" href="https://github.com/atlantisjoin-maker/stock/blob/main/README.md" target="_blank" rel="noreferrer">部署说明</a>
+        </div>
+        <div class="points">
+          <span>账户隔离：新用户持仓为空</span>
+          <span>截图导入：股票、基金、黄金账户</span>
+          <span>基金季报：经理与持仓线索</span>
+          <span>风险纪律：不生成虚假买入信号</span>
+        </div>
+      </section>
+
+      <section class="screen" aria-label="产品界面预览">
+        <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+        <div class="dash">
+          <aside class="nav">
+            <b>A股智能投研</b>
+            <span class="active">投资总览</span>
+            <span>行情中心</span>
+            <span>基金研究</span>
+            <span>持仓管理</span>
+            <span>预警中心</span>
+          </aside>
+          <div class="content">
+            <div class="metrics">
+              <div class="metric"><span>持仓数量</span><b>9</b></div>
+              <div class="metric"><span>组合仓位</span><b>34.2%</b></div>
+              <div class="metric"><span>活动提醒</span><b>6</b></div>
+            </div>
+            <div class="grid">
+              <div class="card">
+                <small>低估值观察</small>
+                <b>基金经理共识 + 估值分位</b>
+                <p class="tag">进入观察池，不直接买入</p>
+              </div>
+              <div class="card">
+                <small>持仓动作</small>
+                <b>加仓观察 / 止损复核</b>
+                <p class="risk">区分基本盘风险和价格波动</p>
+              </div>
+            </div>
+            <div class="table">
+              <div class="row"><span>资产</span><span>题材</span><span>状态</span></div>
+              <div class="row"><span>宁德时代</span><span>动力电池</span><span class="tag">跟踪</span></div>
+              <div class="row"><span>黄金账户</span><span>贵金属</span><span>截图价</span></div>
+              <div class="row"><span>中证医疗</span><span>医药医疗</span><span>净值导入</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <section class="section">
+    <div class="inner">
+      <article class="feature">
+        <h2>本地优先</h2>
+        <p>个人持仓、账户和会话保存在本地 SQLite。公开仓库只包含源码，不包含你的运行数据。</p>
+      </article>
+      <article class="feature">
+        <h2>证据门控</h2>
+        <p>行情、新闻、基金季报和估值代理都有来源状态；数据失败时保持空白或提示异常。</p>
+      </article>
+      <article class="feature">
+        <h2>可扩展</h2>
+        <p>支持接入公募基金季报、东方财富市场数据、OCR 截图识别和自定义研究数据。</p>
+      </article>
+    </div>
+  </section>
+
+  <footer class="footer">
+    本页面仅为项目介绍。投资决策需自行核验公告、财报、估值和风险承受能力。
+  </footer>
+</body>
+</html>
