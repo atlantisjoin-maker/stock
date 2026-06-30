@@ -3577,9 +3577,12 @@ def run(host: str, port: int, open_browser: bool = True):
 
 
 def main() -> None:
+    cfg = config()
+    default_host = os.environ.get("ASTOCK_HOST") or os.environ.get("HOST") or cfg["host"]
+    default_port = os.environ.get("PORT") or os.environ.get("ASTOCK_PORT") or cfg["port"]
     parser = argparse.ArgumentParser(description="A股智能投研网页版")
-    parser.add_argument("--host", default=config()["host"])
-    parser.add_argument("--port", type=int, default=int(config()["port"]))
+    parser.add_argument("--host", default=default_host)
+    parser.add_argument("--port", type=int, default=int(default_port))
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
     run(args.host, args.port, not args.no_browser)

@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: astock-terminal
+    runtime: docker
+    repo: https://github.com/atlantisjoin-maker/stock
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    autoDeployTrigger: off
+    healthCheckPath: /api/health
+    envVars:
+      - key: ASTOCK_HOME
+        value: /data
+      - key: ASTOCK_HOST
+        value: 0.0.0.0
+    disk:
+      name: astock-data
+      mountPath: /data
+      sizeGB: 1

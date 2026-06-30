@@ -2,6 +2,14 @@
 
 面向本地投研与持仓跟踪的网页版工具。基础运行仅依赖 Python 标准库；`mootdx`、OCR 识别为可选能力。
 
+## 网页端直达使用
+
+要让非技术用户点开链接直接使用，需要把项目部署到能运行 Python 后端的云服务。仓库已内置 Dockerfile 和 Render Blueprint：
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/atlantisjoin-maker/stock)
+
+部署成功后使用云服务给出的 `https://...onrender.com` 地址访问。部署说明见 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)。GitHub Pages 只能展示推广页，不能运行登录、数据库、OCR、行情和基金季报抓取。
+
 ## 优化后的实时数据方案
 
 - 行情主链路：腾讯财经 HTTP API，负责实时价、涨跌幅、成交额、换手率、PE/PB、市值等字段。
@@ -29,6 +37,8 @@ python -m astock_terminal --no-browser
 浏览器访问 `http://127.0.0.1:8765`。
 
 首次打开需要创建账户。第一个账户会成为管理员，并接管本机旧版单用户持仓数据；后续账户可以自行注册，持仓、观察池、资金设置和提醒按账户隔离，新账户的持仓页为空。
+
+云端运行时会优先读取 `PORT`、`ASTOCK_HOST` 和 `ASTOCK_HOME` 环境变量；Render 等平台会分配 `PORT`，Docker 镜像默认把数据写入 `/data`。
 
 ## 公开仓库与隐私
 
