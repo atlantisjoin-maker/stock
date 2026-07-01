@@ -21,6 +21,8 @@
 - 基金研究链路：支持从证监会资本市场统一信息披露平台公募基金频道按基金代码抓取季度报告，下载官方 PDF，解析前十大股票持仓，并保留结构化 JSON 导入能力。
 - 三重确认：基金经理信号、股票基本面、估值和价格三层同时通过才进入三重确认；缺少基本面或估值证据时只进入观察池，触发利润下滑、应收/存货/商誉异常、治理风险、行业衰退或披露后涨幅超过 30% 时排除。
 - 持仓动作提示：持仓表右侧显示“右侧加仓观察 / 止损卖出复核 / 暂停加仓”等动作，并区分“基本盘风险”“价格破位”“震荡洗盘观察”。基本盘风险优先级高于价格波动解释。
+- 日线交易计划：按实时价、成本、默认/手工止损价、估值和风险门控生成买入观察区、卖出/减仓参考价和止损点；这是规则化复核清单，不是自动交易指令。
+- 账户资金汇总：可从券商截图 OCR 或设置页录入资金余额、可取/可用/冻结金额、股票市值、总资产、持仓盈亏和当日盈亏，并按总资产重新计算每只持仓占比。
 - 建仓候选提醒：高分或低估值股票会进入 BUILD_POSITION 提醒；系统只提示观察、试探建仓或等待确认，不自动下单。
 
 后台启动后会按配置周期刷新本地缓存。前端只访问本地 API，避免浏览器直接请求外部源导致 CORS、风控或空白页面。
@@ -84,6 +86,7 @@ python -m astock_terminal --no-browser
 - `fund_report_sync.report_years`：限制查询年度，留空时由官方接口按基金代码回溯。
 - `fund_report_sync.parse_pdf`：是否尝试解析官方 PDF 持仓表。
 - `fund_report_sync.structured_json_sources`：官方季报解析后的结构化 JSON 源列表。
+- `notification.whatsapp_access_token`、`notification.whatsapp_phone_number_id`、`notification.whatsapp_to`：WhatsApp Business Platform/Cloud API 通知配置；凭证只放运行环境的 `config.json`，不要提交到 GitHub。
 
 结构化导入格式见 `examples/OFFICIAL_DATA_IMPORT_FORMAT.json`。PDF 解析需要可选依赖：
 

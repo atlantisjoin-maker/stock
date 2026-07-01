@@ -274,6 +274,44 @@ main {
 .panel h2 { font-size: 16px; margin: 0; }
 .panel header span { color: var(--muted); font-size: 11px; }
 
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+  margin-bottom: 10px;
+}
+
+.summary-grid.compact {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.summary-item {
+  border: 1px solid var(--line-soft);
+  background: #151a20;
+  border-radius: 6px;
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+.summary-item span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.summary-item b {
+  display: block;
+  margin-top: 4px;
+  font-size: 17px;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
+
+.summary-foot {
+  color: var(--muted);
+  margin: 8px 0 12px;
+}
+
 .controls {
   display: flex;
   align-items: end;
@@ -514,6 +552,7 @@ a { color: #8fc5ff; }
   .grid.two { grid-template-columns: 1fr; }
   .form.sizing { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ocr-grid { grid-template-columns: 1fr; }
+  .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 720px) {
@@ -531,6 +570,8 @@ a { color: #8fc5ff; }
   main { padding: 10px; }
   .form,
   .form.sizing { grid-template-columns: 1fr; }
+  .summary-grid,
+  .summary-grid.compact { grid-template-columns: 1fr; }
   .controls { flex-direction: column; align-items: stretch; }
   .page-title { align-items: start; flex-direction: column; gap: 10px; }
   #industryChainView { grid-template-columns: 1fr; }

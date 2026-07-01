@@ -65,6 +65,7 @@ async function api(path, opt = {}) {
 
 let STATE = null;
 let PENDING_POSITIONS = [];
+let PENDING_ACCOUNT_SUMMARY = {};
 let AUTH = null;
 
 function showAuth(status = null, message = "") {
@@ -125,7 +126,7 @@ function render() {
 
   $("dashboardCandidates").innerHTML = buildCandidatesHtml(d.build_candidates || [], s.stocks);
   $("dashboardAlerts").innerHTML = alertsHtml(d.alerts.slice(0, 6));
-  $("dashboardPortfolio").innerHTML = `<p>市值 ${money(p.total_market_value)} · 成本 ${money(p.total_cost_value)} · 预计现金 ${money(p.estimated_cash)}</p>${positionsHtml(p.positions.slice(0, 6))}`;
+  $("dashboardPortfolio").innerHTML = `${portfolioSummaryHtml(p, true)}${positionsHtml(p.positions.slice(0, 6))}`;
   $("dashboardSources").innerHTML = sourcesHtml(d.source_health);
   $("quoteTable").innerHTML = quotesHtml(d.quotes);
   $("selectionStatus").textContent = s.message;
@@ -133,11 +134,34 @@ function render() {
   $("consensusTable").innerHTML = consensusHtml(s.consensus);
   $("stockScoreTable").innerHTML = scoresHtml(s.stocks);
   renderFundResearch(d.fund || {});
-  $("portfolioSummary").innerHTML = `<p>组合仓位 <b>${pct(p.invested_weight)}</b> · 浮动盈亏 <b class="${(p.unrealized_pnl || 0) >= 0 ? "positive" : "negative"}">${money(p.unrealized_pnl)}</b> · 预计现金 ${money(p.estimated_cash)}</p>`;
+  $("portfolioSummary").innerHTML = portfolioSummaryHtml(p);
   $("positionTable").innerHTML = positionsHtml(p.positions);
   $("newsList").innerHTML = newsHtml(d.events);
   $("alertList").innerHTML = alertsHtml(d.alerts);
   fillSettings(d.settings);
+}
+
+function summaryItem(label, value, formatter = money, className = "") {
+  return `<div class="summary-item ${esc(className)}"><span>${esc(label)}</span><b>${formatter(value)}</b></div>`;
+}
+
+function portfolioSummaryHtml(p, compact = false) {
+  const a = p.account_summary || {};
+  const dailyClass = (a.daily_pnl || 0) >= 0 ? "positive" : "negative";
+  const pnlClass = (a.holding_pnl || 0) >= 0 ? "positive" : "negative";
+  const cells = [
+    summaryItem("资金余额", a.cash_balance),
+    summaryItem("可取金额", a.withdrawable_cash),
+    summaryItem("持仓盈亏", a.holding_pnl, money, pnlClass),
+    summaryItem("冻结金额", a.frozen_cash),
+    summaryItem("股票市值", a.stock_market_value),
+    summaryItem("当日盈亏", a.daily_pnl, money, dailyClass),
+    summaryItem("可用金额", a.available_cash),
+    summaryItem("总资产", a.total_asset),
+    summaryItem("当日盈亏比", a.daily_pnl_pct, pct, dailyClass),
+  ].join("");
+  const footer = `<p class="summary-foot">组合仓位 <b>${pct(p.invested_weight)}</b> · 股票仓位 <b>${pct(p.stock_invested_weight)}</b> · 成本 ${money(p.total_cost_value)} · 基准 ${money(p.capital_base)}</p>`;
+  return `<div class="summary-grid ${compact ? "compact" : ""}">${cells}</div>${footer}`;
 }
 
 function quotesHtml(rows) {
@@ -184,18 +208,39 @@ function renderFundResearch(fund) {
 }
 
 function positionsHtml(rows) {
-  return table(["类型", "代码", "名称", "题材", "数量", "成本", "现价", "市值", "盈亏", "仓位", "止损", "行情", "动作", "诊断", "操作"], rows.map(x => {
+  return table(["类型", "代码", "名称", "题材", "数量", "成本", "现价", "市值", "盈亏", "仓位", "买点", "卖点", "止损", "行情", "动作", "诊断", "操作"], rows.map(x => {
     const a = x.position_action || {};
+    const d = x.daily_trade_plan || {};
     const encoded = encodeURIComponent(String(x.symbol || ""));
-    return `<tr><td>${esc(x.asset_type_label || x.asset_type || "股票")}</td><td>${esc(x.symbol)}</td><td>${esc(x.name || "—")}</td><td>${esc(x.theme)}</td><td>${fmt(x.quantity, 4)}</td><td>${fmt(x.average_cost, 4)}</td><td>${fmt(x.current_price, 4)}</td><td>${money(x.market_value)}</td><td class="${(x.unrealized_pnl || 0) >= 0 ? "positive" : "negative"}">${money(x.unrealized_pnl)} / ${pct(x.pnl_pct)}</td><td>${pct(x.portfolio_weight)}</td><td>${fmt(x.stop_price)}</td><td>${badge(x.quote_level)}</td><td>${badge(a.action || "—")}</td><td>${esc(a.diagnosis || "—")}</td><td><button class="mini" onclick="deletePosition('${esc(encoded)}')">删除</button></td></tr>`;
+    const buyPoint = d.buy_zone_low == null && d.buy_zone_high == null ? "—" : `${fmt(d.buy_zone_low, 4)}-${fmt(d.buy_zone_high, 4)}`;
+    return `<tr><td>${esc(x.asset_type_label || x.asset_type || "股票")}</td><td>${esc(x.symbol)}</td><td>${esc(x.name || "—")}</td><td>${esc(x.theme)}</td><td>${fmt(x.quantity, 4)}</td><td>${fmt(x.average_cost, 4)}</td><td>${fmt(x.current_price, 4)}</td><td>${money(x.market_value)}</td><td class="${(x.unrealized_pnl || 0) >= 0 ? "positive" : "negative"}">${money(x.unrealized_pnl)} / ${pct(x.pnl_pct)}</td><td>${pct(x.portfolio_weight)}</td><td title="${esc(d.summary || "")}">${buyPoint}</td><td>${fmt(d.sell_point, 4)}</td><td>${fmt(d.stop_loss ?? x.effective_stop_loss ?? x.stop_price, 4)}</td><td>${badge(x.quote_level)}</td><td>${badge(a.action || "—")}</td><td>${esc(a.diagnosis || "—")}</td><td><button class="mini" onclick="deletePosition('${esc(encoded)}')">删除</button></td></tr>`;
   }));
+}
+
+function accountSummaryHtml(summary) {
+  if (!summary || !Object.keys(summary).length) return "";
+  const map = {
+    account_cash_balance: "资金余额",
+    account_withdrawable_cash: "可取金额",
+    account_frozen_cash: "冻结金额",
+    account_available_cash: "可用金额",
+    account_stock_market_value: "股票市值",
+    account_total_asset: "总资产",
+    account_holding_pnl: "持仓盈亏",
+    account_daily_pnl: "当日盈亏",
+    account_daily_pnl_pct: "当日盈亏比",
+  };
+  const rows = Object.entries(map)
+    .filter(([key]) => summary[key] !== undefined && summary[key] !== null)
+    .map(([key, label]) => `<tr><td>${esc(label)}</td><td>${key === "account_daily_pnl_pct" ? pct(summary[key]) : money(summary[key])}</td></tr>`);
+  return `<div class="result"><h3>识别到账户资金汇总</h3>${table(["项目", "数值"], rows)}</div>`;
 }
 
 function recognizedHtml(result) {
   const rows = (result.positions || []).map(x => `<tr><td>${esc(x.asset_type_label || x.asset_type || "股票")}</td><td>${esc(x.symbol)}</td><td>${esc(x.name || "—")}</td><td>${fmt(x.quantity, 4)}</td><td>${fmt(x.average_cost, 4)}</td><td>${fmt(x.current_price, 4)}</td><td>${esc(x.theme || "未分类")}</td></tr>`);
   const warnings = (result.warnings || []).map(x => `<div class="notice">${esc(x)}</div>`).join("");
   const text = result.text ? `<details class="ocr-text"><summary>查看 OCR 原文</summary><pre>${esc(result.text)}</pre></details>` : "";
-  return `${warnings}${result.engine ? `<p>OCR 引擎：${esc(result.engine)}</p>` : ""}${text}${table(["类型", "代码", "名称", "数量", "成本", "现价", "题材"], rows)}`;
+  return `${warnings}${result.engine ? `<p>OCR 引擎：${esc(result.engine)}</p>` : ""}${text}${accountSummaryHtml(result.account_summary)}${table(["类型", "代码", "名称", "数量", "成本", "现价", "题材"], rows)}`;
 }
 
 function fileDataUrl(file) {
@@ -228,7 +273,7 @@ function fillSettings(settings) {
     const field = form.elements[key];
     if (!field) continue;
     if (field.type === "checkbox") field.checked = Boolean(value);
-    else field.value = value;
+    else field.value = key === "account_daily_pnl_pct" && value !== null && value !== undefined ? Number(value) * 100 : value;
   }
 }
 
@@ -417,20 +462,23 @@ $("recognizePositions").onclick = async () => {
     }
     const result = await api("/api/positions/recognize", { method: "POST", body: JSON.stringify(body) });
     PENDING_POSITIONS = result.positions || [];
+    PENDING_ACCOUNT_SUMMARY = result.account_summary || {};
     $("ocrResult").innerHTML = recognizedHtml(result);
-    $("importRecognized").disabled = !PENDING_POSITIONS.length;
+    $("importRecognized").disabled = !PENDING_POSITIONS.length && !Object.keys(PENDING_ACCOUNT_SUMMARY).length;
   } catch (error) {
     alert(error.message);
   }
 };
 
 $("importRecognized").onclick = async () => {
-  if (!PENDING_POSITIONS.length) return;
-  if (!confirm(`导入 ${PENDING_POSITIONS.length} 条识别持仓？`)) return;
-  const result = await api("/api/positions/recognize", { method: "POST", body: JSON.stringify({ positions: PENDING_POSITIONS, apply: true }) });
+  if (!PENDING_POSITIONS.length && !Object.keys(PENDING_ACCOUNT_SUMMARY).length) return;
+  const summaryCount = Object.keys(PENDING_ACCOUNT_SUMMARY).length;
+  if (!confirm(`导入 ${PENDING_POSITIONS.length} 条识别持仓和 ${summaryCount} 项账户汇总？`)) return;
+  const result = await api("/api/positions/recognize", { method: "POST", body: JSON.stringify({ positions: PENDING_POSITIONS, account_summary: PENDING_ACCOUNT_SUMMARY, apply: true }) });
   PENDING_POSITIONS = [];
+  PENDING_ACCOUNT_SUMMARY = {};
   $("importRecognized").disabled = true;
-  $("ocrResult").innerHTML = `<div class="result">已导入 ${result.imported} 条持仓</div>`;
+  $("ocrResult").innerHTML = `<div class="result">已导入 ${result.imported} 条持仓，更新 ${result.imported_settings || 0} 项账户汇总</div>`;
   await load();
 };
 
@@ -450,6 +498,20 @@ $("settingsForm").onsubmit = async event => {
   const form = new FormData(event.target);
   const payload = Object.fromEntries(form.entries());
   ["total_capital", "default_stop_loss_pct", "opportunity_min_score", "opportunity_max_risk"].forEach(key => payload[key] = Number(payload[key]));
+  [
+    "account_cash_balance",
+    "account_withdrawable_cash",
+    "account_frozen_cash",
+    "account_available_cash",
+    "account_stock_market_value",
+    "account_total_asset",
+    "account_holding_pnl",
+    "account_daily_pnl",
+    "account_daily_pnl_pct",
+  ].forEach(key => {
+    const field = event.target.elements[key];
+    if (field && field.value.trim() !== "") payload[key] = Number(field.value);
+  });
   payload.notifications_enabled = event.target.elements.notifications_enabled.checked;
   await api("/api/settings", { method: "POST", body: JSON.stringify(payload) });
   await load();

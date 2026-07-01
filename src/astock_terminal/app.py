@@ -115,6 +115,10 @@ DEFAULT_CONFIG = {
         "feishu_webhook": "",
         "telegram_bot_token": "",
         "telegram_chat_id": "",
+        "whatsapp_access_token": "",
+        "whatsapp_phone_number_id": "",
+        "whatsapp_to": "",
+        "whatsapp_graph_api_version": "v23.0",
         "generic_webhook": ""
     }
 }
@@ -1778,6 +1782,11 @@ def recognize_positions(body: dict[str, Any], user_id: str = LEGACY_OWNER_ID) ->
                 if err:
                     warnings.append(err)
                 text = text or ""
+    account_summary = normalize_account_summary_payload(body.get("account_summary") or {})
+    if text:
+        parsed_summary = parse_account_summary_text(text)
+        if parsed_summary:
+            account_summary.update(parsed_summary)
     if body.get("positions"):
         positions = normalize_position_payload(body.get("positions") or [])
     elif table_positions:
@@ -1796,6 +1805,7 @@ def recognize_positions(body: dict[str, Any], user_id: str = LEGACY_OWNER_ID) ->
                 seen.add(item["symbol"])
         positions = normalize_position_payload(positions)
     imported = 0
+    imported_settings = 0
     if body.get("apply"):
         quote_refresh_needed = False
         for item in normalize_position_payload(positions):
@@ -1804,14 +1814,17 @@ def recognize_positions(body: dict[str, Any], user_id: str = LEGACY_OWNER_ID) ->
                 DB.execute("INSERT OR IGNORE INTO watchlist(owner_id,symbol,name) VALUES(?,?,?)", (user_id, item["symbol"], item.get("name", "")))
                 quote_refresh_needed = True
             imported += 1
-        if imported:
+        if account_summary:
+            DB.set_settings(account_summary, user_id)
+            imported_settings = len([key for key in account_summary if key in ACCOUNT_SUMMARY_KEYS])
+        if imported or imported_settings:
             if quote_refresh_needed:
                 try:
                     refresh_quotes()
                 except Exception as exc:
                     warnings.append(f"已导入，但实时行情刷新失败: {type(exc).__name__}: {exc}")
             rebuild_alerts(user_id)
-    return {"ok": bool(positions), "engine": engine, "text": text, "positions": positions, "warnings": warnings, "imported": imported}
+    return {"ok": bool(positions or account_summary), "engine": engine, "text": text, "positions": positions, "account_summary": account_summary, "warnings": warnings, "imported": imported, "imported_settings": imported_settings}
 
 
 
@@ -2881,6 +2894,184 @@ def parse_json_list(value: Any) -> list[str]:
     return [str(value)] if str(value).strip() else []
 
 
+ACCOUNT_SUMMARY_KEYS = {
+    "account_cash_balance",
+    "account_withdrawable_cash",
+    "account_frozen_cash",
+    "account_available_cash",
+    "account_stock_market_value",
+    "account_total_asset",
+    "account_holding_pnl",
+    "account_daily_pnl",
+    "account_daily_pnl_pct",
+}
+
+
+def safe_float(value: Any, default: float | None = None) -> float | None:
+    if value is None or value == "":
+        return default
+    try:
+        if isinstance(value, str):
+            value = value.strip().replace(",", "").replace("，", "").rstrip("%")
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def normalize_account_summary_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+    payload = payload or {}
+    out: dict[str, Any] = {}
+    for key in ACCOUNT_SUMMARY_KEYS:
+        value = safe_float(payload.get(key))
+        if value is None:
+            continue
+        if key == "account_daily_pnl_pct" and abs(value) > 1:
+            value = value / 100
+        out[key] = value
+    if out:
+        out["account_snapshot_at"] = str(payload.get("account_snapshot_at") or now_iso())
+    return out
+
+
+def parse_account_summary_text(text: str) -> dict[str, Any]:
+    compact = compact_ocr_text(text)
+    labels = {
+        "account_cash_balance": ["资金余额"],
+        "account_withdrawable_cash": ["可取金额"],
+        "account_frozen_cash": ["冻结金额"],
+        "account_available_cash": ["可用金额"],
+        "account_stock_market_value": ["股票市值", "证券市值"],
+        "account_total_asset": ["总资产", "资产总计"],
+        "account_holding_pnl": ["持仓盈亏", "持仓总盈亏"],
+        "account_daily_pnl": ["当日盈亏", "今日盈亏"],
+        "account_daily_pnl_pct": ["当日盈亏比", "今日盈亏比"],
+    }
+    parsed: dict[str, Any] = {}
+    for key, candidates in labels.items():
+        for label in candidates:
+            match = re.search(re.escape(label) + r"[:：]?\s*([-+]?\d+(?:\.\d+)?)%?", compact)
+            if match:
+                parsed[key] = match.group(1)
+                break
+    summary = normalize_account_summary_payload(parsed)
+    if "account_daily_pnl_pct" in parsed:
+        pct_value = safe_float(parsed.get("account_daily_pnl_pct"))
+        if pct_value is not None:
+            summary["account_daily_pnl_pct"] = pct_value / 100
+    numeric_count = len([key for key in summary if key in ACCOUNT_SUMMARY_KEYS])
+    return summary if numeric_count >= 2 else {}
+
+
+def normalize_settings_payload(values: dict[str, Any]) -> dict[str, Any]:
+    out = dict(values)
+    for key in ACCOUNT_SUMMARY_KEYS:
+        if key in out and out[key] in {"", None}:
+            out.pop(key, None)
+    account = normalize_account_summary_payload(out)
+    for key in ACCOUNT_SUMMARY_KEYS | {"account_snapshot_at"}:
+        out.pop(key, None)
+    out.update(account)
+    return out
+
+
+def account_summary_from_settings(settings: dict[str, Any], market_value: float, cost_value: float, fallback_total: float) -> dict[str, Any]:
+    cash_balance = safe_float(settings.get("account_cash_balance"))
+    withdrawable_cash = safe_float(settings.get("account_withdrawable_cash"))
+    frozen_cash = safe_float(settings.get("account_frozen_cash"))
+    available_cash = safe_float(settings.get("account_available_cash"))
+    stock_market_value = safe_float(settings.get("account_stock_market_value"), market_value)
+    total_asset = safe_float(settings.get("account_total_asset"))
+    if total_asset is None:
+        if cash_balance is not None:
+            total_asset = cash_balance + (stock_market_value or market_value)
+        else:
+            total_asset = fallback_total
+    holding_pnl = safe_float(settings.get("account_holding_pnl"), market_value - cost_value if market_value or cost_value else 0)
+    daily_pnl = safe_float(settings.get("account_daily_pnl"))
+    daily_pnl_pct = safe_float(settings.get("account_daily_pnl_pct"))
+    if daily_pnl_pct is not None and abs(daily_pnl_pct) > 1:
+        daily_pnl_pct = daily_pnl_pct / 100
+    estimated_cash = cash_balance if cash_balance is not None else max(total_asset - market_value, 0)
+    return {
+        "cash_balance": estimated_cash,
+        "withdrawable_cash": withdrawable_cash,
+        "frozen_cash": frozen_cash,
+        "available_cash": available_cash,
+        "stock_market_value": stock_market_value,
+        "total_asset": total_asset,
+        "holding_pnl": holding_pnl,
+        "daily_pnl": daily_pnl,
+        "daily_pnl_pct": daily_pnl_pct,
+        "snapshot_at": settings.get("account_snapshot_at") or "",
+        "source": "ACCOUNT_SNAPSHOT" if safe_float(settings.get("account_total_asset")) is not None else "SYSTEM_ESTIMATE",
+    }
+
+
+def inferred_stop_loss(pos: dict[str, Any], settings: dict[str, Any]) -> float | None:
+    explicit = safe_float(pos.get("stop_price"))
+    if explicit:
+        return explicit
+    reference = safe_float(pos.get("current_price")) or safe_float(pos.get("average_cost"))
+    if not reference:
+        return None
+    pct = safe_float(settings.get("default_stop_loss_pct"), 0.06) or 0.06
+    pct = min(max(pct, 0.01), 0.30)
+    return round(reference * (1 - pct), 4)
+
+
+def daily_trade_plan_for_position(pos: dict[str, Any], settings: dict[str, Any], action: dict[str, Any]) -> dict[str, Any]:
+    asset_type = pos.get("asset_type") or "stock"
+    current = safe_float(pos.get("current_price"))
+    cost = safe_float(pos.get("average_cost"))
+    stop = safe_float(pos.get("effective_stop_loss")) or inferred_stop_loss(pos, settings)
+    take_profit = safe_float(pos.get("take_profit_price"))
+    if asset_type != "stock":
+        return {
+            "mode": "PRODUCT_RULE_REVIEW",
+            "buy_point": None,
+            "buy_zone_low": None,
+            "buy_zone_high": None,
+            "sell_point": take_profit,
+            "stop_loss": None,
+            "summary": "非股票资产不按日线买卖点处理，优先核对产品规则、赎回费和流动性。",
+        }
+    basis = current or cost
+    if not basis:
+        return {
+            "mode": "WAIT_PRICE",
+            "buy_point": None,
+            "buy_zone_low": None,
+            "buy_zone_high": None,
+            "sell_point": take_profit,
+            "stop_loss": stop,
+            "summary": "缺少可靠现价，暂不生成买卖点。",
+        }
+    sell_point = take_profit or (max(cost or basis, basis) * 1.10)
+    if action.get("diagnosis") == "基本盘风险":
+        buy_low = buy_high = None
+        summary = "基本盘风险优先，不做加仓买点；先核验公告、财报和新闻来源。"
+    elif action.get("action") in {"止损卖出复核", "暂停加仓/止损复核", "不加仓"}:
+        buy_low = buy_high = None
+        summary = "价格接近或跌破止损线，等待修复确认，不右侧加仓。"
+    elif action.get("action") == "右侧加仓观察":
+        buy_low = basis * 0.98
+        buy_high = basis * 1.01
+        summary = "低估值且未破位时，只允许小仓位分批观察，不追高一次买满。"
+    else:
+        buy_low = basis * 0.96
+        buy_high = basis
+        summary = "常规日线观察区间，等待成交确认和新证据。"
+    return {
+        "mode": "DAILY_RULE_ANALYSIS",
+        "buy_point": round(basis, 4) if buy_high is not None else None,
+        "buy_zone_low": round(buy_low, 4) if buy_low is not None else None,
+        "buy_zone_high": round(buy_high, 4) if buy_high is not None else None,
+        "sell_point": round(sell_point, 4) if sell_point else None,
+        "stop_loss": round(stop, 4) if stop else None,
+        "summary": summary,
+    }
+
+
 def position_action_for(pos: dict[str, Any], profile: dict[str, float]) -> dict[str, Any]:
     asset_type = pos.get("asset_type") or "stock"
     if asset_type != "stock":
@@ -2894,7 +3085,7 @@ def position_action_for(pos: dict[str, Any], profile: dict[str, float]) -> dict[
     symbol = normalize_symbol(pos.get("symbol"))
     current = pos.get("current_price")
     cost = float(pos.get("average_cost") or 0)
-    stop = pos.get("stop_price")
+    stop = pos.get("effective_stop_loss") or pos.get("stop_price")
     pnl_pct = pos.get("pnl_pct")
     weight = pos.get("portfolio_weight") or 0
     quote_level = pos.get("quote_level") or "BLOCK"
@@ -2998,12 +3189,11 @@ def build_position_candidates(limit: int = 8, user_id: str = LEGACY_OWNER_ID) ->
 
 def portfolio(user_id: str = LEGACY_OWNER_ID) -> dict[str, Any]:
     s = DB.settings(user_id)
-    total_capital = float(s.get("total_capital", 100000))
+    configured_total = float(s.get("total_capital", 100000))
     positions = DB.all("SELECT * FROM positions WHERE owner_id=? ORDER BY symbol", (user_id,))
-    result = []
+    raw_result = []
     market_value = 0.0
     cost_value = 0.0
-    themes: dict[str, float] = {}
     for p in positions:
         v = DB.one("SELECT * FROM quote_validation WHERE symbol=?", (p["symbol"],)) or {}
         asset_type = p.get("asset_type") or "stock"
@@ -3024,22 +3214,35 @@ def portfolio(user_id: str = LEGACY_OWNER_ID) -> dict[str, Any]:
         cv = cost * qty
         pnl = mv - cv if mv is not None else None
         pnl_pct = pnl/cv if pnl is not None and cv else None
-        weight = mv/total_capital if mv is not None and total_capital else None
         market_value += mv or 0
         cost_value += cv
-        themes[p["theme"]] = themes.get(p["theme"], 0) + (mv or 0)
         item = {**p, "current_price": current, "market_value": mv, "cost_value": cv,
-                "unrealized_pnl": pnl, "pnl_pct": pnl_pct, "portfolio_weight": weight,
+                "unrealized_pnl": pnl, "pnl_pct": pnl_pct, "portfolio_weight": None,
                 "quote_level": level, "asset_type_label": ASSET_TYPE_LABELS.get(asset_type, asset_type)}
-        item["position_action"] = position_action_for(item, RISK_PROFILES.get(s.get("risk_profile"), RISK_PROFILES["balanced"]))
+        item["effective_stop_loss"] = inferred_stop_loss(item, s)
+        raw_result.append(item)
+    account_summary = account_summary_from_settings(s, market_value, cost_value, configured_total)
+    capital_base = float(account_summary.get("total_asset") or configured_total or 0)
+    result = []
+    themes: dict[str, float] = {}
+    profile = RISK_PROFILES.get(s.get("risk_profile"), RISK_PROFILES["balanced"])
+    for item in raw_result:
+        mv = item.get("market_value") or 0
+        item["portfolio_weight"] = mv / capital_base if capital_base and item.get("market_value") is not None else None
+        themes[item["theme"]] = themes.get(item["theme"], 0) + mv
+        item["position_action"] = position_action_for(item, profile)
+        item["daily_trade_plan"] = daily_trade_plan_for_position(item, s, item["position_action"])
         result.append(item)
     return {
         "settings": s, "positions": result, "position_count": len(result),
         "total_market_value": market_value, "total_cost_value": cost_value,
         "unrealized_pnl": market_value-cost_value if result else 0,
-        "invested_weight": market_value/total_capital if total_capital else 0,
-        "estimated_cash": max(total_capital-market_value, 0),
-        "theme_exposure": {k: v/total_capital for k, v in themes.items()} if total_capital else {}
+        "invested_weight": market_value/capital_base if capital_base else 0,
+        "stock_invested_weight": (account_summary.get("stock_market_value") or market_value) / capital_base if capital_base else 0,
+        "estimated_cash": account_summary.get("cash_balance"),
+        "capital_base": capital_base,
+        "account_summary": account_summary,
+        "theme_exposure": {k: v/capital_base for k, v in themes.items()} if capital_base else {}
     }
 
 
@@ -3129,8 +3332,9 @@ def rebuild_alerts(user_id: str | None = None):
         action = pos.get("position_action") or {}
         if (pos.get("asset_type") or "stock") == "stock" and pos["quote_level"] == "BLOCK":
             alerts.append(("DATA", "HIGH", pos["symbol"], "行情验证失败", "该持仓没有通过双源行情验证", "暂停该股票新增操作"))
-        if pos.get("current_price") and pos.get("stop_price") and pos["current_price"] <= pos["stop_price"]:
-            alerts.append(("RISK", "CRITICAL", pos["symbol"], "触及止损线", f"现价{pos['current_price']:.2f}不高于止损价{pos['stop_price']:.2f}", "立即人工复核交易计划"))
+        stop_price = pos.get("effective_stop_loss") or pos.get("stop_price")
+        if pos.get("current_price") and stop_price and pos["current_price"] <= stop_price:
+            alerts.append(("RISK", "CRITICAL", pos["symbol"], "触及止损线", f"现价{pos['current_price']:.2f}不高于止损价{stop_price:.2f}", "立即人工复核交易计划"))
         if (pos.get("asset_type") or "stock") == "stock" and (pos.get("portfolio_weight") or 0) > profile["stock_max"]:
             alerts.append(("RISK", "HIGH", pos["symbol"], "单股仓位超限", f"仓位{pos['portfolio_weight']:.1%}超过{profile['stock_max']:.0%}上限", "停止加仓，评估集中度"))
         if action.get("action") in {"右侧加仓观察", "止损卖出复核", "暂停加仓/止损复核", "不加仓"}:
@@ -3291,7 +3495,7 @@ def post_json(url: str, payload: dict[str, Any], headers: dict[str,str] | None =
 def send_notification(message: str, channel: str | None = None) -> dict[str, Any]:
     cfg=config()["notification"]
     outcomes=[]
-    targets=[channel] if channel else ["wecom","dingtalk","feishu","telegram","generic"]
+    targets=[channel] if channel else ["wecom","dingtalk","feishu","telegram","whatsapp","generic"]
     for name in targets:
         try:
             if name=="wecom" and cfg.get("wecom_webhook"):
@@ -3303,6 +3507,16 @@ def send_notification(message: str, channel: str | None = None) -> dict[str, Any
             elif name=="telegram" and cfg.get("telegram_bot_token") and cfg.get("telegram_chat_id"):
                 url=f"https://api.telegram.org/bot{cfg['telegram_bot_token']}/sendMessage"
                 status,_=post_json(url,{"chat_id":cfg["telegram_chat_id"],"text":message})
+            elif name=="whatsapp" and cfg.get("whatsapp_access_token") and cfg.get("whatsapp_phone_number_id") and cfg.get("whatsapp_to"):
+                version = str(cfg.get("whatsapp_graph_api_version") or "v23.0").strip().strip("/")
+                phone_id = urllib.parse.quote(str(cfg["whatsapp_phone_number_id"]).strip(), safe="")
+                url=f"https://graph.facebook.com/{version}/{phone_id}/messages"
+                status,_=post_json(url,{
+                    "messaging_product":"whatsapp",
+                    "to":str(cfg["whatsapp_to"]).strip(),
+                    "type":"text",
+                    "text":{"preview_url":False,"body":message[:4096]},
+                },headers={"Authorization":f"Bearer {cfg['whatsapp_access_token']}"})
             elif name=="generic" and cfg.get("generic_webhook"):
                 status,_=post_json(cfg["generic_webhook"],{"text":message,"timestamp":now_iso()})
             else:
@@ -3469,7 +3683,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(backfill_position_metadata(user_id))
             if path=="/api/positions/recognize":
                 return self.send_json(recognize_positions(body, user_id))
-            if path=="/api/settings": DB.set_settings(body, user_id); rebuild_alerts(user_id); return self.send_json({"ok":True,"settings":DB.settings(user_id)})
+            if path=="/api/settings": DB.set_settings(normalize_settings_payload(body), user_id); rebuild_alerts(user_id); return self.send_json({"ok":True,"settings":DB.settings(user_id)})
             if path=="/api/position-size": return self.send_json(position_size(body))
             if path=="/api/alerts/ack": DB.execute("UPDATE alerts SET acknowledged=1 WHERE owner_id=? AND alert_id=?",(user_id, body.get("alert_id"))); return self.send_json({"ok":True})
             if path=="/api/notifications/test": return self.send_json(send_notification(body.get("message","A股网页版通知测试"),body.get("channel")))

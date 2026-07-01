@@ -196,16 +196,25 @@
               <label>机会最低分<input name="opportunity_min_score" type="number"></label>
               <label>机会最高风险分<input name="opportunity_max_risk" type="number"></label>
               <label>市场环境<select name="market_regime"><option value="defensive">防御</option><option value="neutral">中性</option><option value="risk_on">偏强</option></select></label>
+              <label>资金余额<input name="account_cash_balance" type="number" step="0.01"></label>
+              <label>可取金额<input name="account_withdrawable_cash" type="number" step="0.01"></label>
+              <label>冻结金额<input name="account_frozen_cash" type="number" step="0.01"></label>
+              <label>可用金额<input name="account_available_cash" type="number" step="0.01"></label>
+              <label>股票市值<input name="account_stock_market_value" type="number" step="0.01"></label>
+              <label>总资产<input name="account_total_asset" type="number" step="0.01"></label>
+              <label>持仓盈亏<input name="account_holding_pnl" type="number" step="0.01"></label>
+              <label>当日盈亏<input name="account_daily_pnl" type="number" step="0.01"></label>
+              <label>当日盈亏比(%)<input name="account_daily_pnl_pct" type="number" step="0.01"></label>
               <label class="check"><input name="notifications_enabled" type="checkbox">开启通知</label>
               <button class="primary">保存设置</button>
             </form>
           </article>
           <article class="panel">
             <header><h2>通知测试</h2><span>密钥只写入 config.json</span></header>
-            <select id="notifyChannel"><option value="">全部已配置通道</option><option value="wecom">企业微信</option><option value="dingtalk">钉钉</option><option value="feishu">飞书</option><option value="telegram">Telegram</option><option value="generic">通用 Webhook</option></select>
+            <select id="notifyChannel"><option value="">全部已配置通道</option><option value="wecom">企业微信</option><option value="dingtalk">钉钉</option><option value="feishu">飞书</option><option value="telegram">Telegram</option><option value="whatsapp">WhatsApp</option><option value="generic">通用 Webhook</option></select>
             <textarea id="notifyMessage">A股智能投研网页版通知测试。</textarea>
             <button id="notifyTest" class="primary">发送测试</button>
-            <div class="notice">个人微信没有通用官方机器人接口；建议使用企业微信、钉钉或飞书。</div>
+            <div class="notice">WhatsApp 需在 config.json 配置 Meta Cloud API 的 access token、phone number id 和接收手机号；不要把密钥提交到 GitHub。</div>
           </article>
         </div>
       </section>

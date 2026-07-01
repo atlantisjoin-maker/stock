@@ -56,6 +56,10 @@
     "feishu_webhook": "",
     "telegram_bot_token": "",
     "telegram_chat_id": "",
+    "whatsapp_access_token": "",
+    "whatsapp_phone_number_id": "",
+    "whatsapp_to": "",
+    "whatsapp_graph_api_version": "v23.0",
     "generic_webhook": ""
   }
 }

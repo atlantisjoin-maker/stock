@@ -77,6 +77,12 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(rows[0]['theme'],'黄金/贵金属')
         self.assertAlmostEqual(rows[0]['quantity'],8.0002,places=4)
         self.assertEqual(rows[0]['current_price'],863.35)
+    def test_parse_account_summary_text(self):
+        text='资金余额 54709.39 可取金额 0.00 持仓盈亏 -2487.41 冻结金额 28055.98 股票市值 149713.32 当日盈亏 -961.28 可用金额 26653.41 总资产 204422.71 当日盈亏比 -0.47%'
+        summary=web_app.parse_account_summary_text(text)
+        self.assertEqual(summary['account_total_asset'],204422.71)
+        self.assertEqual(summary['account_stock_market_value'],149713.32)
+        self.assertAlmostEqual(summary['account_daily_pnl_pct'],-0.0047)
     def test_parse_fund_product_rows_without_codes(self):
         text='黄金产业 840.70 -520.30 -38.22% 700 700 1.944 1.201\n科技50 116.80 +57.60 +97.30% 100 100 0.592 1.168\n中证医疗 2534.00 -509.00 -16.78% 7000 7000 0.435 0.362'
         rows,warnings=web_app.parse_product_positions_text(text)
@@ -230,6 +236,58 @@ class CoreTests(unittest.TestCase):
         )
         action = web_app.portfolio()["positions"][0]["position_action"]
         self.assertEqual(action["action"], "右侧加仓观察")
+        plan = web_app.portfolio()["positions"][0]["daily_trade_plan"]
+        self.assertEqual(plan["mode"], "DAILY_RULE_ANALYSIS")
+        self.assertGreater(plan["stop_loss"], 0)
+
+    def test_portfolio_account_summary_recalculates_weight(self):
+        user_id = "acct-test"
+        web_app.DB.execute("DELETE FROM positions WHERE owner_id=?", (user_id,))
+        web_app.DB.execute("DELETE FROM user_settings WHERE owner_id=?", (user_id,))
+        web_app.upsert_position({"symbol":"002532","name":"天山铝业","theme":"有色金属","quantity":1000,"average_cost":11.114,"current_price":10.68,"score":50}, user_id)
+        web_app.DB.set_settings({
+            "account_cash_balance": 54709.39,
+            "account_stock_market_value": 149713.32,
+            "account_total_asset": 204422.71,
+            "account_daily_pnl": -961.28,
+            "account_daily_pnl_pct": -0.0047,
+        }, user_id)
+        p = web_app.portfolio(user_id)
+        self.assertEqual(p["capital_base"], 204422.71)
+        self.assertAlmostEqual(p["positions"][0]["portfolio_weight"], 10680/204422.71)
+        self.assertAlmostEqual(p["stock_invested_weight"], 149713.32/204422.71)
+
+    def test_send_whatsapp_notification(self):
+        captured = {}
+        globals_map = web_app.send_notification.__globals__
+        old_post = globals_map["post_json"]
+        try:
+            web_app.CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            web_app.CONFIG_PATH.write_text(json.dumps({
+                "notification": {
+                    "whatsapp_access_token": "token-1",
+                    "whatsapp_phone_number_id": "12345",
+                    "whatsapp_to": "15551234567",
+                    "whatsapp_graph_api_version": "v23.0",
+                }
+            }), encoding="utf-8")
+            def fake_post(url, payload, headers=None, timeout=8.0):
+                captured["url"] = url
+                captured["payload"] = payload
+                captured["headers"] = headers
+                return 200, "{}"
+            globals_map["post_json"] = fake_post
+            result = web_app.send_notification("测试消息", "whatsapp")
+            self.assertEqual(result["results"][0]["status"], "OK")
+            self.assertIn("/v23.0/12345/messages", captured["url"])
+            self.assertEqual(captured["payload"]["messaging_product"], "whatsapp")
+            self.assertEqual(captured["headers"]["Authorization"], "Bearer token-1")
+        finally:
+            globals_map["post_json"] = old_post
+            try:
+                web_app.CONFIG_PATH.unlink()
+            except FileNotFoundError:
+                pass
 
     def test_build_position_candidates_low_valuation(self):
         for table in ["positions", "stock_scores", "stock_valuations"]:

@@ -1,4 +1,4 @@
-const CACHE = 'astock-v4-1-8-static';
+const CACHE = 'astock-v4-1-9-static';
 const ASSETS = ['/', '/static/styles.css', '/static/app.js', '/manifest.json'];
 
 self.addEventListener('install', event => {
