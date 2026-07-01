@@ -257,6 +257,35 @@ class CoreTests(unittest.TestCase):
         self.assertAlmostEqual(p["positions"][0]["portfolio_weight"], 10680/204422.71)
         self.assertAlmostEqual(p["stock_invested_weight"], 149713.32/204422.71)
 
+    def test_stock_consultation_proxy_score_and_chain(self):
+        for table in ["quote_validation", "stock_scores", "stock_valuations", "fund_consensus", "stock_due_diligence", "fund_report_holdings", "fund_reports"]:
+            web_app.DB.execute("DELETE FROM " + table)
+        web_app.DB.execute(
+            "INSERT OR REPLACE INTO quote_validation(symbol,name,last_price,level,primary_provider,secondary_provider,deviation,reasons,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            ("300750","宁德时代",395.0,"WARN",None,"tencent",None,'["仅有单一新鲜行情源，禁止强买入信号"]',web_app.now_iso()),
+        )
+        web_app.DB.execute(
+            "INSERT OR REPLACE INTO stock_valuations(symbol,name,pe_ttm,pb,valuation_percentile,price_drawdown_pct,evidence_status,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+            ("300750","宁德时代",28,4.2,22,-18,"PARTIAL_VALUATION_PROXY",web_app.now_iso()),
+        )
+        result = web_app.stock_consultation_data("300750", refresh=False)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["symbol"], "300750")
+        self.assertEqual(result["score"]["source_status"], "QUOTE_VALUATION_PROXY")
+        self.assertGreater(result["score"]["total_score"], 50)
+        self.assertIn("回撤观察区", result["trade_plan"]["entry"])
+        self.assertEqual(result["industry_chain"]["chain"], "新能源车")
+
+    def test_stock_consultation_accepts_000_stock_code(self):
+        web_app.DB.execute("DELETE FROM quote_validation WHERE symbol='000001'")
+        web_app.DB.execute(
+            "INSERT OR REPLACE INTO quote_validation(symbol,name,last_price,level,primary_provider,secondary_provider,deviation,reasons,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            ("000001","平安银行",12.34,"WARN",None,"tencent",None,"[]",web_app.now_iso()),
+        )
+        result = web_app.stock_consultation_data("000001", refresh=False)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["symbol"], "000001")
+
     def test_send_whatsapp_notification(self):
         captured = {}
         globals_map = web_app.send_notification.__globals__

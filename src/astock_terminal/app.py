@@ -1930,10 +1930,13 @@ def validate_quotes(symbols: list[str]):
         )
 
 
-def refresh_quotes() -> dict[str, Any]:
-    symbols = {r["symbol"] for r in DB.all("SELECT symbol FROM watchlist") if is_six_digit_symbol(r["symbol"])}
-    symbols |= {r["symbol"] for r in DB.all("SELECT symbol FROM positions") if is_six_digit_symbol(r["symbol"])}
-    symbols = sorted(symbols)
+def refresh_quotes(symbols: list[str] | None = None) -> dict[str, Any]:
+    if symbols is None:
+        target_symbols = {r["symbol"] for r in DB.all("SELECT symbol FROM watchlist") if is_six_digit_symbol(r["symbol"])}
+        target_symbols |= {r["symbol"] for r in DB.all("SELECT symbol FROM positions") if is_six_digit_symbol(r["symbol"])}
+    else:
+        target_symbols = {normalize_symbol(str(symbol)) for symbol in symbols if is_six_digit_symbol(symbol)}
+    symbols = sorted(target_symbols)
     if not symbols:
         return {"symbols": [], "tencent": {"count": 0, "error": None}, "mootdx": {"count": 0, "error": None}}
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
@@ -2624,6 +2627,140 @@ def industry_chain_for(item: dict[str, Any]) -> dict[str, Any]:
         "catalysts": ["行业景气度变化", "业绩或订单验证", "政策与事件催化"],
         "risks": ["数据覆盖不足", "估值与盈利不匹配", "基金季报披露滞后"],
         "checks": ["补充行业研究和公司公告", "核验财务质量", "观察价格行为和资金延续性"],
+    }
+
+
+def stock_proxy_score(symbol: str, quote: dict[str, Any], valuation: dict[str, Any]) -> dict[str, Any]:
+    price = quote.get("last_price")
+    level = quote.get("level") or "BLOCK"
+    name = quote.get("name") or valuation.get("name") or known_stock_name(symbol, "")
+    valuation_percentile = safe_float(valuation.get("valuation_percentile"))
+    drawdown = safe_float(valuation.get("price_drawdown_pct"))
+    valuation_signal = 50.0
+    if valuation_percentile is not None:
+        valuation_signal = _clamp(92 - valuation_percentile * 0.9, 20, 92)
+    if drawdown is not None and drawdown <= -15:
+        valuation_signal = _clamp(valuation_signal + 5, 20, 95)
+    risk = 45 if level == "OK" else 62 if level == "WARN" else 88
+    trend = 55.0
+    if price and drawdown is not None:
+        trend = 58 if drawdown < 0 else 52
+    total = _clamp(valuation_signal * 0.38 + trend * 0.22 + (100 - risk) * 0.24 + 50 * 0.16, 0, 100)
+    if level == "BLOCK":
+        total = min(total, 45)
+    grade = "B-低估值观察" if total >= 70 else "C-行情估值观察" if total >= 55 else "D-数据不足"
+    return {
+        "symbol": symbol,
+        "name": name,
+        "industry": infer_asset_theme(symbol, name, "stock", ""),
+        "quality": None,
+        "growth": None,
+        "valuation": round(valuation_signal, 2),
+        "trend": round(trend, 2),
+        "risk": round(risk, 2),
+        "fund_signal": 0,
+        "manager_signal": 0,
+        "fundamental_signal": None,
+        "valuation_signal": round(valuation_signal, 2),
+        "total_score": round(total, 2),
+        "grade": grade,
+        "data_date": quote.get("updated_at") or now_iso(),
+        "triple_confirm_status": "QUOTE_VALUATION_PROXY",
+        "exclusion_flags": "[]",
+        "scoring_notes": "根据已有结论推断出；未导入官方基金季报或基本面尽调时，仅按行情有效性和估值代理生成咨询初筛分。",
+        "source_status": "QUOTE_VALUATION_PROXY",
+        "updated_at": now_iso(),
+    }
+
+
+def is_consultable_stock_symbol(symbol: str) -> bool:
+    code = normalize_symbol(symbol)
+    return is_six_digit_symbol(code) and not code.startswith(("1", "5", "399"))
+
+
+def decode_event(row: dict[str, Any]) -> dict[str, Any]:
+    out = dict(row)
+    for key in ("symbols", "themes"):
+        try:
+            parsed = json.loads(out.get(key) or "[]")
+            out[key] = parsed if isinstance(parsed, list) else []
+        except Exception:
+            out[key] = []
+    return out
+
+
+def stock_consultation_data(symbol: str, user_id: str = LEGACY_OWNER_ID, refresh: bool = False) -> dict[str, Any]:
+    code = normalize_symbol(str(symbol or ""))
+    if not is_consultable_stock_symbol(code):
+        return {"ok": False, "error": "请输入有效的 6 位 A 股股票代码，不支持基金、ETF 或非股票资产。"}
+    refresh_result = None
+    valuation_result = None
+    if refresh:
+        refresh_result = refresh_quotes([code])
+        valuation_result = refresh_stock_valuations([code])
+    quote = DB.one("SELECT * FROM quote_validation WHERE symbol=?", (code,)) or {}
+    if quote:
+        try:
+            quote["reasons"] = json.loads(quote.get("reasons") or "[]")
+        except Exception:
+            quote["reasons"] = [str(quote.get("reasons"))]
+    valuation = DB.one("SELECT * FROM stock_valuations WHERE symbol=?", (code,)) or {}
+    score = DB.one("SELECT * FROM stock_scores WHERE symbol=?", (code,))
+    consensus = DB.one("SELECT * FROM fund_consensus WHERE symbol=?", (code,)) or {}
+    due = DB.one("SELECT * FROM stock_due_diligence WHERE symbol=?", (code,)) or {}
+    if not score:
+        score = stock_proxy_score(code, quote, valuation)
+    name = score.get("name") or quote.get("name") or valuation.get("name") or known_stock_name(code, code)
+    industry = score.get("industry") or valuation.get("industry") or due.get("industry") or infer_asset_theme(code, name, "stock", "")
+    item = {**score, "symbol": code, "name": name, "industry": industry}
+    item["valuation_detail"] = valuation
+    item["consensus"] = consensus
+    item["due_diligence"] = due
+    item["trade_plan"] = trade_plan_for_stock(item)
+    item["industry_chain"] = industry_chain_for(item)
+    holdings = DB.all(
+        """SELECT h.*, r.report_period, r.fund_code, r.fund_name, r.manager_name, r.company
+           FROM fund_report_holdings h JOIN fund_reports r ON r.report_id=h.report_id
+           WHERE h.symbol=?
+           ORDER BY r.report_period DESC, h.holding_rank LIMIT 20""",
+        (code,),
+    )
+    events = DB.all(
+        """SELECT * FROM news_events WHERE symbols LIKE ?
+           ORDER BY COALESCE(published_at, fetched_at) DESC LIMIT 10""",
+        (f"%{code}%",),
+    )
+    position = DB.one("SELECT * FROM positions WHERE owner_id=? AND symbol=?", (user_id, code)) or {}
+    position_action = None
+    if position:
+        p = portfolio(user_id)
+        for row in p.get("positions", []):
+            if row.get("symbol") == code:
+                position_action = row.get("position_action")
+                break
+    warnings = []
+    if not quote or quote.get("level") == "BLOCK":
+        warnings.append("行情未通过验证，买卖点只保留为待确认。")
+    if item.get("source_status") == "QUOTE_VALUATION_PROXY":
+        warnings.append("当前没有官方基金季报评分，已使用行情/估值代理评分；只能作为初筛。")
+    if not due:
+        warnings.append("缺少公司基本面尽调数据，不能完成三重确认。")
+    return {
+        "ok": True,
+        "symbol": code,
+        "name": name,
+        "quote": quote,
+        "score": item,
+        "valuation": valuation,
+        "consensus": consensus,
+        "due_diligence": due,
+        "trade_plan": item["trade_plan"],
+        "industry_chain": item["industry_chain"],
+        "fund_holdings": holdings,
+        "events": [decode_event(e) for e in events],
+        "position_action": position_action,
+        "warnings": warnings,
+        "refresh": {"quote": refresh_result, "valuation": valuation_result},
     }
 
 
@@ -3702,6 +3839,9 @@ class Handler(BaseHTTPRequestHandler):
                 if isinstance(symbols, str):
                     symbols = symbols.split(",")
                 return self.send_json(refresh_stock_valuations(symbols))
+            if path=="/api/stocks/consult":
+                result = stock_consultation_data(body.get("symbol") or body.get("code"), user_id, bool(body.get("refresh", True)))
+                return self.send_json(result, 200 if result.get("ok") else 400)
             if path=="/api/stocks/due-diligence/import":
                 imported = import_stock_due_diligence_items(body.get("items", []))
                 return self.send_json({"ok": bool(imported), "imported": imported, "selection": selection_data(), "fund": fund_research_data(limit=50)})
