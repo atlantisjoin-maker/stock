@@ -305,6 +305,9 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(result["symbol"], "300750")
         self.assertEqual(result["score"]["source_status"], "QUOTE_VALUATION_PROXY")
         self.assertGreater(result["score"]["total_score"], 50)
+        self.assertGreater(result["trade_plan"]["buy_zone_low"], 0)
+        self.assertGreater(result["trade_plan"]["sell_point"], result["quote"]["last_price"])
+        self.assertGreater(result["trade_plan"]["stop_loss"], 0)
         self.assertIn("回撤观察区", result["trade_plan"]["entry"])
         self.assertEqual(result["industry_chain"]["chain"], "新能源车")
 
@@ -351,8 +354,12 @@ class CoreTests(unittest.TestCase):
                 pass
 
     def test_build_position_candidates_low_valuation(self):
-        for table in ["positions", "stock_scores", "stock_valuations"]:
+        for table in ["positions", "stock_scores", "stock_valuations", "quote_validation"]:
             web_app.DB.execute("DELETE FROM " + table)
+        web_app.DB.execute(
+            "INSERT OR REPLACE INTO quote_validation(symbol,name,last_price,level,primary_provider,secondary_provider,deviation,reasons,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            ("600000","浦发银行",10.0,"OK","tencent","mootdx",0,"[]",web_app.now_iso()),
+        )
         web_app.DB.execute(
             "INSERT OR REPLACE INTO stock_scores(symbol,name,total_score,valuation_signal,triple_confirm_status,source_status,updated_at) VALUES(?,?,?,?,?,?,?)",
             ("600000","浦发银行",70,85,"WATCH_ONLY","OFFICIAL_FUND_REPORT",web_app.now_iso()),
@@ -363,7 +370,49 @@ class CoreTests(unittest.TestCase):
         )
         candidates = web_app.build_position_candidates()
         self.assertEqual(candidates[0]["symbol"], "600000")
+        self.assertEqual(candidates[0]["trade_plan"]["buy_zone_low"], 9.7)
+        self.assertEqual(candidates[0]["trade_plan"]["sell_point"], 11.2)
+        self.assertEqual(candidates[0]["trade_plan"]["stop_loss"], 9.0)
         self.assertIn("低估值", candidates[0]["action"])
+
+    def test_trade_point_alert_pushes_for_existing_position(self):
+        user_id = "trade-point-test"
+        for table in ["positions", "stock_scores", "stock_valuations", "quote_validation", "alerts", "user_settings"]:
+            if table == "user_settings":
+                web_app.DB.execute("DELETE FROM user_settings WHERE owner_id=?", (user_id,))
+            elif table in {"positions", "alerts"}:
+                web_app.DB.execute("DELETE FROM " + table + " WHERE owner_id=?", (user_id,))
+            else:
+                web_app.DB.execute("DELETE FROM " + table + " WHERE symbol='600000'")
+        web_app.DB.set_settings({"notifications_enabled": True, "total_capital": 100000, "trade_point_alert_pct": 0.02}, user_id)
+        web_app.upsert_position({"symbol":"600000","name":"浦发银行","theme":"银行","quantity":100,"average_cost":10,"score":75}, user_id)
+        web_app.DB.execute(
+            "INSERT OR REPLACE INTO quote_validation(symbol,name,last_price,level,primary_provider,secondary_provider,deviation,reasons,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            ("600000","浦发银行",10.0,"OK","tencent","mootdx",0,"[]",web_app.now_iso()),
+        )
+        web_app.DB.execute(
+            "INSERT OR REPLACE INTO stock_scores(symbol,name,total_score,valuation_signal,triple_confirm_status,exclusion_flags,source_status,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+            ("600000","浦发银行",75,82,"WATCH_ONLY","[]","OFFICIAL_FUND_REPORT",web_app.now_iso()),
+        )
+        web_app.DB.execute(
+            "INSERT OR REPLACE INTO stock_valuations(symbol,name,pe_ttm,pb,valuation_percentile,price_drawdown_pct,evidence_status,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+            ("600000","浦发银行",6,0.6,18,-10,"PARTIAL_VALUATION_PROXY",web_app.now_iso()),
+        )
+        captured = {}
+        globals_map = web_app.rebuild_alerts.__globals__
+        old_send = globals_map["send_notification"]
+        try:
+            def fake_send(message, channel=None):
+                captured["message"] = message
+                captured["channel"] = channel
+                return {"results":[{"channel":"fake","status":"OK"}]}
+            globals_map["send_notification"] = fake_send
+            web_app.rebuild_alerts(user_id)
+        finally:
+            globals_map["send_notification"] = old_send
+        alerts = web_app.DB.all("SELECT * FROM alerts WHERE owner_id=? AND category='TRADE_POINT'", (user_id,))
+        self.assertTrue(alerts)
+        self.assertIn("600000", captured.get("message", ""))
 
     def test_parse_eid_fund_detail_html(self):
         html = """

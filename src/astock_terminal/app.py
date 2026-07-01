@@ -333,6 +333,7 @@ class Database:
                 "total_capital": 100000,
                 "risk_profile": "balanced",
                 "default_stop_loss_pct": 0.06,
+                "trade_point_alert_pct": 0.015,
                 "notifications_enabled": False,
                 "opportunity_min_score": 70,
                 "opportunity_max_risk": 35,
@@ -2857,6 +2858,104 @@ def stock_consultation_data(symbol: str, user_id: str = LEGACY_OWNER_ID, refresh
     }
 
 
+def stock_trade_levels(price: Any, risk: Any = 70) -> dict[str, Any]:
+    current = safe_float(price)
+    if not current or current <= 0:
+        return {
+            "current_price": None,
+            "buy_point": None,
+            "buy_zone_low": None,
+            "buy_zone_high": None,
+            "breakout_point": None,
+            "sell_point": None,
+            "take_profit_primary": None,
+            "take_profit_secondary": None,
+            "stop_loss": None,
+            "entry": "缺少有效行情，暂不生成买卖点。",
+            "take_profit": None,
+        }
+    risk_value = safe_float(risk, 70) or 70
+    pullback_low = current * 0.97
+    pullback_high = current * 0.99
+    breakout = current * 1.03
+    stop = current * (0.92 if risk_value < 55 else 0.90)
+    take1 = current * 1.12
+    take2 = current * 1.20
+    return {
+        "current_price": round(current, 4),
+        "buy_point": round((pullback_low + pullback_high) / 2, 4),
+        "buy_zone_low": round(pullback_low, 4),
+        "buy_zone_high": round(pullback_high, 4),
+        "breakout_point": round(breakout, 4),
+        "sell_point": round(take1, 4),
+        "take_profit_primary": round(take1, 4),
+        "take_profit_secondary": round(take2, 4),
+        "stop_loss": round(stop, 4),
+        "entry": f"回撤观察区 {pullback_low:.2f}-{pullback_high:.2f}；放量突破观察价 {breakout:.2f}",
+        "take_profit": f"{take1:.2f} / {take2:.2f}",
+    }
+
+
+def trade_point_proximity(current_price: Any, plan: dict[str, Any], threshold: float = 0.015) -> list[dict[str, Any]]:
+    current = safe_float(current_price)
+    if not current or current <= 0:
+        return []
+    threshold = min(max(float(threshold or 0.015), 0.002), 0.08)
+    alerts: list[dict[str, Any]] = []
+    stop = safe_float(plan.get("stop_loss") if plan.get("stop_loss") is not None else plan.get("stop"))
+    sell = safe_float(plan.get("sell_point") if plan.get("sell_point") is not None else plan.get("take_profit_primary"))
+    buy_low = safe_float(plan.get("buy_zone_low"))
+    buy_high = safe_float(plan.get("buy_zone_high"))
+    if stop:
+        if current <= stop:
+            alerts.append({
+                "status": "STOP_LOSS_TRIGGERED",
+                "label": "触及止损点",
+                "severity": "CRITICAL",
+                "target_type": "stop_loss",
+                "target_price": round(stop, 4),
+                "distance_pct": round((current - stop) / stop, 4),
+                "message": f"现价{current:.2f}已不高于止损点{stop:.2f}，先人工复核是否执行止损。",
+            })
+        elif current <= stop * (1 + threshold):
+            alerts.append({
+                "status": "NEAR_STOP_LOSS",
+                "label": "接近止损点",
+                "severity": "WARN",
+                "target_type": "stop_loss",
+                "target_price": round(stop, 4),
+                "distance_pct": round((current - stop) / stop, 4),
+                "message": f"现价{current:.2f}距离止损点{stop:.2f}较近，暂停加仓并复核基本面。",
+            })
+    if sell and current >= sell * (1 - threshold):
+        reached = current >= sell
+        alerts.append({
+            "status": "SELL_POINT_REACHED" if reached else "NEAR_SELL_POINT",
+            "label": "触及卖点" if reached else "接近卖点",
+            "severity": "HIGH" if reached else "WARN",
+            "target_type": "sell_point",
+            "target_price": round(sell, 4),
+            "distance_pct": round((current - sell) / sell, 4),
+            "message": f"现价{current:.2f}{'已达到' if reached else '接近'}卖点{sell:.2f}，复核止盈/减仓计划。",
+        })
+    if buy_low and buy_high:
+        low = min(buy_low, buy_high)
+        high = max(buy_low, buy_high)
+        if low * (1 - threshold) <= current <= high * (1 + threshold):
+            inside = low <= current <= high
+            edge = low if current < low else high if current > high else current
+            alerts.append({
+                "status": "IN_BUY_ZONE" if inside else "NEAR_BUY_ZONE",
+                "label": "进入买点区间" if inside else "接近买点区间",
+                "severity": "INFO",
+                "target_type": "buy_zone",
+                "target_price": round(edge, 4),
+                "distance_pct": 0 if inside else round((current - edge) / edge, 4),
+                "message": f"现价{current:.2f}{'处于' if inside else '接近'}买点区间{low:.2f}-{high:.2f}，只按计划分批复核。",
+            })
+    return alerts
+
+
 def trade_plan_for_stock(item: dict[str, Any]) -> dict[str, Any]:
     symbol = normalize_symbol(item.get("symbol", ""))
     quote = DB.one("SELECT * FROM quote_validation WHERE symbol=?", (symbol,)) or {}
@@ -2872,62 +2971,67 @@ def trade_plan_for_stock(item: dict[str, Any]) -> dict[str, Any]:
             flags = json.loads(flags)
         except Exception:
             flags = [flags] if flags else []
+    levels = stock_trade_levels(price, risk)
+    proximity = trade_point_proximity(price, levels)
     if triple_status == "EXCLUDED":
         return {
+            **levels,
             "symbol": symbol,
             "action": "排除",
             "entry": "触发排除项：" + "；".join(flags),
             "stop": None,
             "take_profit": None,
+            "stop_loss": None,
+            "sell_point": None,
             "max_weight": 0,
             "tranche": "0",
             "reason": "不满足三重确认",
+            "proximity": proximity,
         }
     if not price or level == "BLOCK":
         return {
+            **levels,
             "symbol": symbol,
             "action": "等待",
             "entry": "缺少有效行情或行情被拦截，不能给出执行区间",
             "stop": None,
             "take_profit": None,
+            "stop_loss": None,
+            "sell_point": None,
             "max_weight": 0,
             "tranche": "0",
             "reason": "行情验证未通过",
+            "proximity": proximity,
         }
     if source == "OFFICIAL_FUND_REPORT" and triple_status != "TRIPLE_CONFIRMED":
         return {
+            **levels,
             "symbol": symbol,
             "action": "观察",
             "entry": "仅基金季报线索，需补基本面、估值和价格回撤证据；不追季报披露后的热门股",
-            "stop": None,
-            "take_profit": None,
+            "stop": levels.get("stop_loss"),
             "max_weight": 0.02 if triple_status == "RESEARCH_ONLY_NEEDS_FUNDAMENTAL_VALUATION" else 0,
             "tranche": "观察组合，不执行正式买入；初学者单只股票不超过总资金2%-5%",
             "reason": item.get("scoring_notes") or "三重确认未完成",
+            "proximity": proximity,
         }
     base_weight = 0.05 if source == "OFFICIAL_FUND_REPORT" else 0.02
     score_adj = _clamp((total - 60) / 40, 0, 1)
     risk_adj = _clamp((85 - risk) / 55, 0.25, 1)
     quote_adj = 0.6 if level == "WARN" else 1.0
     max_weight = round(base_weight * (0.45 + 0.55 * score_adj) * risk_adj * quote_adj, 4)
-    pullback_low = price * 0.97
-    pullback_high = price * 0.99
-    breakout = price * 1.03
-    stop = price * (0.92 if risk < 55 else 0.90)
-    take1 = price * 1.12
-    take2 = price * 1.20
     action = "重点跟踪" if total >= 72 else "观察"
     if source == "OFFICIAL_FUND_REPORT" and total >= 82 and level == "OK" and triple_status == "TRIPLE_CONFIRMED":
         action = "优先尽调"
     return {
+        **levels,
         "symbol": symbol,
         "action": action,
-        "entry": f"回撤观察区 {pullback_low:.2f}-{pullback_high:.2f}；放量突破观察价 {breakout:.2f}",
-        "stop": round(stop, 2),
-        "take_profit": f"{take1:.2f} / {take2:.2f}",
+        "stop": levels.get("stop_loss"),
         "max_weight": max_weight,
         "tranche": "1/3试探 + 1/3确认 + 1/3回踩，不追高一次买满",
         "reason": "基于基金共识/市场信号、行情验证和风险分的规则化交易计划",
+        "proximity": proximity,
     }
 
 
@@ -3323,6 +3427,7 @@ def daily_trade_plan_for_position(pos: dict[str, Any], settings: dict[str, Any],
             "sell_point": take_profit,
             "stop_loss": None,
             "summary": "非股票资产不按日线买卖点处理，优先核对产品规则、赎回费和流动性。",
+            "proximity": [],
         }
     basis = current or cost
     if not basis:
@@ -3334,6 +3439,7 @@ def daily_trade_plan_for_position(pos: dict[str, Any], settings: dict[str, Any],
             "sell_point": take_profit,
             "stop_loss": stop,
             "summary": "缺少可靠现价，暂不生成买卖点。",
+            "proximity": [],
         }
     sell_point = take_profit or (max(cost or basis, basis) * 1.10)
     if action.get("diagnosis") == "基本盘风险":
@@ -3350,7 +3456,7 @@ def daily_trade_plan_for_position(pos: dict[str, Any], settings: dict[str, Any],
         buy_low = basis * 0.96
         buy_high = basis
         summary = "常规日线观察区间，等待成交确认和新证据。"
-    return {
+    plan = {
         "mode": "DAILY_RULE_ANALYSIS",
         "buy_point": round(basis, 4) if buy_high is not None else None,
         "buy_zone_low": round(buy_low, 4) if buy_low is not None else None,
@@ -3359,6 +3465,11 @@ def daily_trade_plan_for_position(pos: dict[str, Any], settings: dict[str, Any],
         "stop_loss": round(stop, 4) if stop else None,
         "summary": summary,
     }
+    proximity = trade_point_proximity(current, plan, safe_float(settings.get("trade_point_alert_pct"), 0.015) or 0.015)
+    if action.get("action") != "右侧加仓观察":
+        proximity = [item for item in proximity if item.get("target_type") != "buy_zone"]
+    plan["proximity"] = proximity
+    return plan
 
 
 def position_action_for(pos: dict[str, Any], profile: dict[str, float]) -> dict[str, Any]:
@@ -3458,7 +3569,7 @@ def build_position_candidates(limit: int = 8, user_id: str = LEGACY_OWNER_ID) ->
         else:
             action = "低估值观察"
             severity = "INFO"
-        out.append({
+        candidate = {
             "symbol": symbol,
             "name": row.get("name") or "",
             "total_score": total,
@@ -3470,7 +3581,9 @@ def build_position_candidates(limit: int = 8, user_id: str = LEGACY_OWNER_ID) ->
             "action": action,
             "severity": severity,
             "reason": "根据已有结论推断出；高分低估值只能进入观察或试探建仓候选，仍需基本面和成交确认。",
-        })
+        }
+        candidate["trade_plan"] = trade_plan_for_stock(candidate)
+        out.append(candidate)
         if len(out) >= limit:
             break
     return out
@@ -3621,11 +3734,19 @@ def alert_owner_ids() -> list[str]:
     return sorted(ids or {LEGACY_OWNER_ID})
 
 
+def should_push_alert(category: str, severity: str) -> bool:
+    return category == "TRADE_POINT" or severity in {"CRITICAL", "HIGH"}
+
+
 def rebuild_alerts(user_id: str | None = None):
     if user_id is None:
         for owner_id in alert_owner_ids():
             rebuild_alerts(owner_id)
         return
+    existing_active = {
+        row["alert_id"]
+        for row in DB.all("SELECT alert_id FROM alerts WHERE owner_id=? AND acknowledged=0", (user_id,))
+    }
     DB.execute("DELETE FROM alerts WHERE owner_id=? AND acknowledged=0", (user_id,))
     p = portfolio(user_id)
     settings = p["settings"]
@@ -3651,6 +3772,22 @@ def rebuild_alerts(user_id: str | None = None):
                 action.get("message") or "",
                 action.get("reason") or "",
             ))
+        if (pos.get("asset_type") or "stock") == "stock":
+            plan = pos.get("daily_trade_plan") or {}
+            for signal in plan.get("proximity") or []:
+                if signal.get("status") == "STOP_LOSS_TRIGGERED":
+                    continue
+                label = signal.get("label") or "接近买卖点"
+                target = signal.get("target_price")
+                target_text = f"{float(target):.2f}" if target is not None else "NA"
+                alerts.append((
+                    "TRADE_POINT",
+                    signal.get("severity", "INFO"),
+                    pos["symbol"],
+                    f"{label}：{pos.get('name') or pos['symbol']}",
+                    signal.get("message") or f"现价接近计划价位 {target_text}",
+                    "进入持仓页复核买点/卖点/止损点，按分批和仓位上限执行，不追高一次买满",
+                ))
     for candidate in build_position_candidates(limit=5, user_id=user_id):
         alerts.append((
             "BUILD_POSITION",
@@ -3675,12 +3812,20 @@ def rebuild_alerts(user_id: str | None = None):
             for sym in relevant:
                 alerts.append(("OPPORTUNITY", "INFO", sym, "已验证机会线索", e["title"], "进入研究池，等待量价确认"))
     rows=[]
+    push_messages=[]
     for cat, sev, sym, title, msg, action in alerts:
         raw=f"{user_id}|{cat}|{sev}|{sym}|{title}|{msg}"
         aid=hashlib.sha256(raw.encode()).hexdigest()[:16]
         rows.append((user_id,aid,cat,sev,sym,title,msg,action,now_iso(),0))
+        if aid not in existing_active and bool(settings.get("notifications_enabled")) and should_push_alert(cat, sev):
+            push_messages.append(f"[{sev}] {sym or ''} {title}：{msg}")
     if rows:
         DB.executemany("INSERT OR REPLACE INTO alerts(owner_id,alert_id,category,severity,symbol,title,message,action,created_at,acknowledged) VALUES(?,?,?,?,?,?,?,?,?,?)", rows)
+    if push_messages:
+        try:
+            send_notification("A股智能投研提醒\n" + "\n".join(push_messages[:8]))
+        except Exception:
+            pass
 
 
 def selection_data(user_id: str = LEGACY_OWNER_ID) -> dict[str, Any]:
@@ -3712,14 +3857,16 @@ def selection_data(user_id: str = LEGACY_OWNER_ID) -> dict[str, Any]:
         }
     for s in scores:
         c=cons.get(s["symbol"],{})
-        combined.append({**s,"manager_count":c.get("manager_count",0),"company_count":c.get("company_count",0),
-                         "confirmed_increase":c.get("confirmed_increase",0),"new_visible":c.get("new_visible",0),
-                         "consecutive_increase":c.get("consecutive_increase",0),
-                         "excellent_manager_count":c.get("excellent_manager_count",0),
-                         "style_count":c.get("style_count",0),
-                         "valuation_detail":valuation_map.get(s["symbol"],{}),
-                         "consensus_score":c.get("consensus_score"),"fund_report_period":c.get("report_period"),
-                         "fund_evidence_status":c.get("evidence_status","UNVERIFIED")})
+        enriched = {**s,"manager_count":c.get("manager_count",0),"company_count":c.get("company_count",0),
+                    "confirmed_increase":c.get("confirmed_increase",0),"new_visible":c.get("new_visible",0),
+                    "consecutive_increase":c.get("consecutive_increase",0),
+                    "excellent_manager_count":c.get("excellent_manager_count",0),
+                    "style_count":c.get("style_count",0),
+                    "valuation_detail":valuation_map.get(s["symbol"],{}),
+                    "consensus_score":c.get("consensus_score"),"fund_report_period":c.get("report_period"),
+                    "fund_evidence_status":c.get("evidence_status","UNVERIFIED")}
+        enriched["trade_plan"] = trade_plan_for_stock(enriched)
+        combined.append(enriched)
     if not combined:
         qrows = DB.all(
             """SELECT qv.*, w.symbol AS watched FROM quote_validation qv
@@ -3729,7 +3876,7 @@ def selection_data(user_id: str = LEGACY_OWNER_ID) -> dict[str, Any]:
             (user_id,),
         )
         for q in qrows:
-            combined.append({
+            item = {
                 "symbol": q["symbol"], "name": q.get("name", ""), "industry": "观察池",
                 "quality": None, "growth": None, "valuation": None, "trend": None,
                 "risk": 45 if q.get("level") == "OK" else 65 if q.get("level") == "WARN" else 90,
@@ -3738,7 +3885,9 @@ def selection_data(user_id: str = LEGACY_OWNER_ID) -> dict[str, Any]:
                 "manager_count": 0, "company_count": 0, "confirmed_increase": 0,
                 "new_visible": 0, "consensus_score": None, "fund_report_period": None,
                 "fund_evidence_status": "NO_OFFICIAL_DATA",
-            })
+            }
+            item["trade_plan"] = trade_plan_for_stock(item)
+            combined.append(item)
     official_scores = [x for x in scores if x.get("source_status") not in {"A_STOCK_DATA_SIGNAL"}]
     status="READY" if managers or consensus or official_scores else "NO_OFFICIAL_DATA"
     if status != "READY" and scores:

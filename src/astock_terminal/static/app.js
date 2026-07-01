@@ -43,6 +43,15 @@ const flagsText = value => {
   }
 };
 const valuationOf = x => x.valuation_detail || {};
+const tradePlanOf = x => x.trade_plan || {};
+const buyZoneText = p => {
+  if (!p || (p.buy_zone_low == null && p.buy_zone_high == null)) return "—";
+  return `${fmt(p.buy_zone_low, 4)}-${fmt(p.buy_zone_high, 4)}`;
+};
+const tradePointStatus = p => {
+  const items = p?.proximity || [];
+  return items.length ? items.map(x => x.label || x.status).join("；") : "—";
+};
 
 async function api(path, opt = {}) {
   const response = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opt });
@@ -179,15 +188,22 @@ function consensusHtml(rows) {
 
 function scoresHtml(rows) {
   if (!rows.length) return '<div class="empty">暂无正式股票评分。刷新市场信号后可先查看 a-stock-data 热度线索；正式推荐仍需导入官方基金季报和评分数据。</div>';
-  return table(["代码", "名称", "行业", "估值分位", "PE", "PB", "回撤", "经理层", "基本面", "估值层", "总分", "等级", "来源"], rows.map(x => {
+  return table(["代码", "名称", "行业", "估值分位", "PE", "PB", "回撤", "经理层", "基本面", "估值层", "总分", "等级", "买点", "卖点", "止损", "状态", "来源"], rows.map(x => {
     const v = valuationOf(x);
-    return `<tr><td>${esc(x.symbol)}</td><td>${esc(x.name || "—")}</td><td>${esc(x.industry || "—")}</td><td>${fmt(v.valuation_percentile ?? x.valuation)}</td><td>${fmt(v.pe_ttm)}</td><td>${fmt(v.pb)}</td><td>${pctPoint(v.price_drawdown_pct)}</td><td>${fmt(x.manager_signal)}</td><td>${fmt(x.fundamental_signal)}</td><td>${fmt(x.valuation_signal)}</td><td><b>${fmt(x.total_score)}</b></td><td>${esc(x.grade || "—")}</td><td>${badge(x.source_status)}</td></tr>`;
+    const p = tradePlanOf(x);
+    return `<tr><td>${esc(x.symbol)}</td><td>${esc(x.name || "—")}</td><td>${esc(x.industry || "—")}</td><td>${fmt(v.valuation_percentile ?? x.valuation)}</td><td>${fmt(v.pe_ttm)}</td><td>${fmt(v.pb)}</td><td>${pctPoint(v.price_drawdown_pct)}</td><td>${fmt(x.manager_signal)}</td><td>${fmt(x.fundamental_signal)}</td><td>${fmt(x.valuation_signal)}</td><td><b>${fmt(x.total_score)}</b></td><td>${esc(x.grade || "—")}</td><td>${buyZoneText(p)}</td><td>${fmt(p.sell_point, 4)}</td><td>${fmt(p.stop_loss ?? p.stop, 4)}</td><td>${esc(tradePointStatus(p))}</td><td>${badge(x.source_status)}</td></tr>`;
   }));
 }
 
 function buildCandidatesHtml(candidates, fallbackRows) {
-  const rows = candidates.length ? candidates.map(x => `<tr><td>${esc(x.symbol)}</td><td>${esc(x.name || "—")}</td><td>${fmt(x.total_score)}</td><td>${fmt(x.valuation_percentile)}</td><td>${fmt(x.pe_ttm)}</td><td>${fmt(x.pb)}</td><td>${pctPoint(x.price_drawdown_pct)}</td><td>${badge(x.triple_confirm_status)}</td><td>${esc(x.action || "—")}</td></tr>`) : fallbackRows.slice(0, 8).map(x => `<tr><td>${esc(x.symbol)}</td><td>${esc(x.name || "—")}</td><td>${fmt(x.total_score)}</td><td>${fmt(x.consensus_score)}</td><td>—</td><td>—</td><td>—</td><td>${badge(x.source_status)}</td><td>${esc(x.grade || "—")}</td></tr>`);
-  return table(["代码", "名称", "总分", "估值分位", "PE", "PB", "回撤", "确认", "动作"], rows);
+  const rows = candidates.length ? candidates.map(x => {
+    const p = tradePlanOf(x);
+    return `<tr><td>${esc(x.symbol)}</td><td>${esc(x.name || "—")}</td><td>${fmt(x.total_score)}</td><td>${fmt(x.valuation_percentile)}</td><td>${fmt(x.pe_ttm)}</td><td>${fmt(x.pb)}</td><td>${pctPoint(x.price_drawdown_pct)}</td><td>${badge(x.triple_confirm_status)}</td><td>${esc(x.action || "—")}</td><td>${buyZoneText(p)}</td><td>${fmt(p.sell_point, 4)}</td><td>${fmt(p.stop_loss ?? p.stop, 4)}</td><td>${esc(tradePointStatus(p))}</td></tr>`;
+  }) : fallbackRows.slice(0, 8).map(x => {
+    const p = tradePlanOf(x);
+    return `<tr><td>${esc(x.symbol)}</td><td>${esc(x.name || "—")}</td><td>${fmt(x.total_score)}</td><td>${fmt(x.consensus_score)}</td><td>—</td><td>—</td><td>—</td><td>${badge(x.source_status)}</td><td>${esc(x.grade || "—")}</td><td>${buyZoneText(p)}</td><td>${fmt(p.sell_point, 4)}</td><td>${fmt(p.stop_loss ?? p.stop, 4)}</td><td>${esc(tradePointStatus(p))}</td></tr>`;
+  });
+  return table(["代码", "名称", "总分", "估值分位", "PE", "PB", "回撤", "确认", "动作", "买点", "卖点", "止损", "状态"], rows);
 }
 
 function renderFundResearch(fund) {
@@ -195,10 +211,10 @@ function renderFundResearch(fund) {
   $("fundResearchStatus").textContent = fund.message || "尚未导入官方基金季报结构化数据。";
   $("fundManagerRank").innerHTML = table(["经理", "公司", "得分", "任期", "报告期", "证据"], (fund.managers || []).slice(0, 20).map(x => `<tr><td>${esc(x.name)}</td><td>${esc(x.company)}</td><td>${fmt(x.score)}</td><td>${fmt(x.tenure_years)}年</td><td>${esc(x.report_period || "—")}</td><td>${badge(x.evidence_status)}</td></tr>`));
   $("fundReportTable").innerHTML = table(["报告期", "基金", "经理", "公告日", "覆盖率", "解析", "证据"], (fund.reports || []).slice(0, 30).map(x => `<tr><td>${esc(x.report_period)}</td><td>${esc(x.fund_code)} ${esc(x.fund_name || "")}</td><td>${esc(x.manager_name || "—")}</td><td>${esc(x.announcement_date || "—")}</td><td>${fmt(x.coverage)}</td><td>${badge(x.parser_status)}</td><td>${badge(x.evidence_status)}</td></tr>`));
-  $("fundTradePlans").innerHTML = table(["代码", "名称", "估值分位", "PE", "PB", "回撤", "三重确认", "排除项", "操作", "买入观察", "仓位上限"], (fund.stocks || []).slice(0, 30).map(x => {
+  $("fundTradePlans").innerHTML = table(["代码", "名称", "估值分位", "PE", "PB", "回撤", "三重确认", "排除项", "操作", "买点", "卖点", "止损", "仓位上限"], (fund.stocks || []).slice(0, 30).map(x => {
     const p = x.trade_plan || {};
     const v = valuationOf(x);
-    return `<tr><td>${esc(x.symbol)}</td><td>${esc(x.name || "—")}</td><td>${fmt(v.valuation_percentile ?? x.valuation)}</td><td>${fmt(v.pe_ttm)}</td><td>${fmt(v.pb)}</td><td>${pctPoint(v.price_drawdown_pct)}</td><td>${badge(x.triple_confirm_status)}</td><td>${esc(flagsText(x.exclusion_flags))}</td><td>${esc(p.action || "—")}</td><td>${esc(p.entry || "—")}</td><td>${pct(p.max_weight)}</td></tr>`;
+    return `<tr><td>${esc(x.symbol)}</td><td>${esc(x.name || "—")}</td><td>${fmt(v.valuation_percentile ?? x.valuation)}</td><td>${fmt(v.pe_ttm)}</td><td>${fmt(v.pb)}</td><td>${pctPoint(v.price_drawdown_pct)}</td><td>${badge(x.triple_confirm_status)}</td><td>${esc(flagsText(x.exclusion_flags))}</td><td>${esc(p.action || "—")}</td><td title="${esc(p.entry || "")}">${buyZoneText(p)}</td><td>${fmt(p.sell_point, 4)}</td><td>${fmt(p.stop_loss ?? p.stop, 4)}</td><td>${pct(p.max_weight)}</td></tr>`;
   }));
   const chainCards = (fund.stocks || []).slice(0, 8).map(x => {
     const c = x.industry_chain || {};
@@ -231,8 +247,10 @@ function stockConsultationHtml(data) {
   ];
   const planRows = [
     `<tr><td>操作</td><td>${esc(p.action || "—")}</td><td>仓位上限</td><td>${pct(p.max_weight)}</td></tr>`,
+    `<tr><td>买点区间</td><td>${buyZoneText(p)}</td><td>突破观察</td><td>${fmt(p.breakout_point, 4)}</td></tr>`,
+    `<tr><td>卖点</td><td>${fmt(p.sell_point ?? p.take_profit_primary, 4)}</td><td>止损</td><td>${fmt(p.stop_loss ?? p.stop, 4)}</td></tr>`,
+    `<tr><td>止盈分批</td><td>${esc(p.take_profit || "—")}</td><td>接近状态</td><td>${esc(tradePointStatus(p))}</td></tr>`,
     `<tr><td>买入观察</td><td colspan="3">${esc(p.entry || "—")}</td></tr>`,
-    `<tr><td>止损</td><td>${fmt(p.stop)}</td><td>止盈</td><td>${esc(p.take_profit || "—")}</td></tr>`,
     `<tr><td>分批</td><td colspan="3">${esc(p.tranche || "—")}</td></tr>`,
     `<tr><td>原因</td><td colspan="3">${esc(p.reason || s.scoring_notes || "—")}</td></tr>`,
   ];
@@ -243,12 +261,12 @@ function stockConsultationHtml(data) {
 }
 
 function positionsHtml(rows) {
-  return table(["类型", "代码", "名称", "题材", "数量", "成本", "现价", "市值", "盈亏", "仓位", "买点", "卖点", "止损", "行情", "动作", "诊断", "操作"], rows.map(x => {
+  return table(["类型", "代码", "名称", "题材", "数量", "成本", "现价", "市值", "盈亏", "仓位", "买点", "卖点", "止损", "接近状态", "行情", "动作", "诊断", "操作"], rows.map(x => {
     const a = x.position_action || {};
     const d = x.daily_trade_plan || {};
     const encoded = encodeURIComponent(String(x.symbol || ""));
     const buyPoint = d.buy_zone_low == null && d.buy_zone_high == null ? "—" : `${fmt(d.buy_zone_low, 4)}-${fmt(d.buy_zone_high, 4)}`;
-    return `<tr><td>${esc(x.asset_type_label || x.asset_type || "股票")}</td><td>${esc(x.symbol)}</td><td>${esc(x.name || "—")}</td><td>${esc(x.theme)}</td><td>${fmt(x.quantity, 4)}</td><td>${fmt(x.average_cost, 4)}</td><td>${fmt(x.current_price, 4)}</td><td>${money(x.market_value)}</td><td class="${(x.unrealized_pnl || 0) >= 0 ? "positive" : "negative"}">${money(x.unrealized_pnl)} / ${pct(x.pnl_pct)}</td><td>${pct(x.portfolio_weight)}</td><td title="${esc(d.summary || "")}">${buyPoint}</td><td>${fmt(d.sell_point, 4)}</td><td>${fmt(d.stop_loss ?? x.effective_stop_loss ?? x.stop_price, 4)}</td><td>${badge(x.quote_level)}</td><td>${badge(a.action || "—")}</td><td>${esc(a.diagnosis || "—")}</td><td><button class="mini" onclick="deletePosition('${esc(encoded)}')">删除</button></td></tr>`;
+    return `<tr><td>${esc(x.asset_type_label || x.asset_type || "股票")}</td><td>${esc(x.symbol)}</td><td>${esc(x.name || "—")}</td><td>${esc(x.theme)}</td><td>${fmt(x.quantity, 4)}</td><td>${fmt(x.average_cost, 4)}</td><td>${fmt(x.current_price, 4)}</td><td>${money(x.market_value)}</td><td class="${(x.unrealized_pnl || 0) >= 0 ? "positive" : "negative"}">${money(x.unrealized_pnl)} / ${pct(x.pnl_pct)}</td><td>${pct(x.portfolio_weight)}</td><td title="${esc(d.summary || "")}">${buyPoint}</td><td>${fmt(d.sell_point, 4)}</td><td>${fmt(d.stop_loss ?? x.effective_stop_loss ?? x.stop_price, 4)}</td><td>${esc(tradePointStatus(d))}</td><td>${badge(x.quote_level)}</td><td>${badge(a.action || "—")}</td><td>${esc(a.diagnosis || "—")}</td><td><button class="mini" onclick="deletePosition('${esc(encoded)}')">删除</button></td></tr>`;
   }));
 }
 
