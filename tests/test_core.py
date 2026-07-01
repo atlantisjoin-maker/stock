@@ -62,6 +62,10 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(item['name'], '萤石网络')
         self.assertEqual(item['quantity'], 116)
         self.assertEqual(item['average_cost'], 11.510)
+    def test_parse_ocr_account_decimal_repairs_windows_ocr_noise(self):
+        self.assertEqual(web_app.parse_ocr_account_decimal('S470939'), 54709.39)
+        self.assertEqual(web_app.parse_ocr_account_decimal('1 S2704 \uff0c 88'), 152704.88)
+        self.assertEqual(web_app.parse_ocr_account_decimal('0 \uff0c 99 %'), 0.99)
     def test_parse_position_text_extracts_current_price_and_theme(self):
         text='证券代码 证券名称 持仓 成本价 最新价\n600036 招商银行 100 35.791 35.590'
         rows,warnings=web_app.parse_position_text(text)
@@ -83,6 +87,15 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(summary['account_total_asset'],204422.71)
         self.assertEqual(summary['account_stock_market_value'],149713.32)
         self.assertAlmostEqual(summary['account_daily_pnl_pct'],-0.0047)
+    def test_parse_mobile_account_summary_text(self):
+        text='总资产(人民币) 34,284.77 仓位 10.2% 可用 转账 10,793.27 可取 0.00 证券总资产 3,491.50 持仓总盈亏 -971.70 当日盈亏 -71.50'
+        summary=web_app.parse_account_summary_text(text)
+        self.assertEqual(summary['account_total_asset'],34284.77)
+        self.assertEqual(summary['account_available_cash'],10793.27)
+        self.assertEqual(summary['account_stock_market_value'],3491.50)
+        self.assertEqual(summary['account_holding_pnl'],-971.70)
+        self.assertEqual(summary['account_withdrawable_cash'],0.0)
+        self.assertEqual(summary['account_daily_pnl'],-71.50)
     def test_parse_fund_product_rows_without_codes(self):
         text='黄金产业 840.70 -520.30 -38.22% 700 700 1.944 1.201\n科技50 116.80 +57.60 +97.30% 100 100 0.592 1.168\n中证医疗 2534.00 -509.00 -16.78% 7000 7000 0.435 0.362'
         rows,warnings=web_app.parse_product_positions_text(text)
@@ -245,6 +258,7 @@ class CoreTests(unittest.TestCase):
         web_app.DB.execute("DELETE FROM positions WHERE owner_id=?", (user_id,))
         web_app.DB.execute("DELETE FROM user_settings WHERE owner_id=?", (user_id,))
         web_app.upsert_position({"symbol":"002532","name":"天山铝业","theme":"有色金属","quantity":1000,"average_cost":11.114,"current_price":10.68,"score":50}, user_id)
+        web_app.upsert_position({"symbol":"GOLD-CMB","name":"招商黄金账户","theme":"黄金/贵金属","asset_type":"gold","quantity":8,"average_cost":1000,"current_price":870,"score":50}, user_id)
         web_app.DB.set_settings({
             "account_cash_balance": 54709.39,
             "account_stock_market_value": 149713.32,
@@ -253,9 +267,27 @@ class CoreTests(unittest.TestCase):
             "account_daily_pnl_pct": -0.0047,
         }, user_id)
         p = web_app.portfolio(user_id)
-        self.assertEqual(p["capital_base"], 204422.71)
+        self.assertEqual(p["stock_capital_base"], 204422.71)
+        self.assertAlmostEqual(p["capital_base"], 204422.71 + 6960)
         self.assertAlmostEqual(p["positions"][0]["portfolio_weight"], 10680/204422.71)
         self.assertAlmostEqual(p["stock_invested_weight"], 149713.32/204422.71)
+        gold = [x for x in p["positions"] if x["asset_type"] == "gold"][0]
+        self.assertAlmostEqual(gold["portfolio_weight"], 6960/(204422.71+6960))
+
+    def test_product_account_summary_does_not_override_stock_snapshot(self):
+        user_id = "product-acct-test"
+        web_app.DB.execute("DELETE FROM positions WHERE owner_id=?", (user_id,))
+        web_app.DB.execute("DELETE FROM user_settings WHERE owner_id=?", (user_id,))
+        web_app.DB.set_settings({
+            "account_total_asset": 207414.27,
+            "account_stock_market_value": 152704.88,
+        }, user_id)
+        text = "总资产（人民币）0@34284.77 可用[唾]10793.27 可取0.00 证券总资产03491.50 持仓总盈亏一971.70 当日盈亏0一71.50\n黄金产业 840.70 -520.30 -38.22% 700 700 1.944 1.201"
+        result = web_app.recognize_positions({"text": text, "apply": True}, user_id)
+        settings = web_app.DB.settings(user_id)
+        self.assertEqual(result["imported_settings"], 0)
+        self.assertEqual(settings["account_total_asset"], 207414.27)
+        self.assertTrue(any(item["asset_type"] == "fund" for item in result["positions"]))
 
     def test_stock_consultation_proxy_score_and_chain(self):
         for table in ["quote_validation", "stock_scores", "stock_valuations", "fund_consensus", "stock_due_diligence", "fund_report_holdings", "fund_reports"]:

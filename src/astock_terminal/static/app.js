@@ -160,7 +160,7 @@ function portfolioSummaryHtml(p, compact = false) {
     summaryItem("总资产", a.total_asset),
     summaryItem("当日盈亏比", a.daily_pnl_pct, pct, dailyClass),
   ].join("");
-  const footer = `<p class="summary-foot">组合仓位 <b>${pct(p.invested_weight)}</b> · 股票仓位 <b>${pct(p.stock_invested_weight)}</b> · 成本 ${money(p.total_cost_value)} · 基准 ${money(p.capital_base)}</p>`;
+  const footer = `<p class="summary-foot">组合仓位 <b>${pct(p.invested_weight)}</b> · 股票仓位 <b>${pct(p.stock_invested_weight)}</b> · 股票基准 ${money(p.stock_capital_base)} · 整体基准 ${money(p.capital_base)}</p>`;
   return `<div class="summary-grid ${compact ? "compact" : ""}">${cells}</div>${footer}`;
 }
 

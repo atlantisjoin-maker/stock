@@ -935,6 +935,32 @@ def parse_ocr_decimal(value: str, *, default_decimals: int = 3) -> float | None:
     return float(digits)
 
 
+def parse_ocr_account_decimal(value: str, *, default_decimals: int = 2) -> float | None:
+    text = str(value or "").translate(FULLWIDTH_TRANS)
+    text = text.translate(str.maketrans({
+        "S": "5", "s": "5", "$": "5",
+        "O": "0", "o": "0", "D": "0", "Q": "0",
+        "I": "1", "l": "1", "|": "1",
+        "B": "8", "Z": "2", "G": "6",
+    }))
+    sep_matches = list(re.finditer(r"[\.,锛岋紟路]", text))
+    if sep_matches:
+        sep = sep_matches[-1]
+        left_groups = re.findall(r"\d+", text[:sep.start()])
+        right_groups = re.findall(r"\d+", text[sep.end():])
+        if left_groups and right_groups:
+            integer = "".join(left_groups)
+            decimal = "".join(right_groups)[:default_decimals].ljust(default_decimals, "0")
+            return float(f"{integer}.{decimal}")
+    groups = re.findall(r"\d+", text)
+    if not groups:
+        return None
+    digits = "".join(groups)
+    if len(digits) > default_decimals:
+        return float(digits[:-default_decimals] + "." + digits[-default_decimals:])
+    return float(digits)
+
+
 def parse_ocr_quantity(groups: list[str]) -> int:
     if len(groups) >= 3 and all(len(group) == 1 for group in groups[:3]):
         if len(groups) >= 6 and groups[:3] == groups[3:6]:
@@ -1687,6 +1713,59 @@ $result.Text
             pass
 
 
+def recognize_broker_account_summary(image_bytes: bytes) -> dict[str, Any]:
+    try:
+        from PIL import Image
+    except Exception:
+        return {}
+    try:
+        image = Image.open(io.BytesIO(image_bytes))
+    except Exception:
+        return {}
+    x_lines, y_lines = detect_broker_table_grid(image)
+    if len(x_lines) < 7 or len(y_lines) < 3:
+        return {}
+    width, _height = image.size
+    table_top = y_lines[0]
+    if table_top <= 80:
+        return {}
+    sx = width / 1133
+    sy = sx
+
+    def scaled_box(box: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+        x1, y1, x2, y2 = box
+        return (
+            max(0, int(round(x1 * sx))),
+            max(0, int(round(y1 * sy))),
+            min(width, int(round(x2 * sx))),
+            max(1, int(round(y2 * sy))),
+        )
+
+    cells = {
+        "account_cash_balance": (140, 47, 230, 78),
+        "account_frozen_cash": (120, 72, 245, 112),
+        "account_available_cash": (140, 108, 240, 140),
+        "account_withdrawable_cash": (385, 47, 455, 78),
+        "account_stock_market_value": (350, 75, 472, 110),
+        "account_total_asset": (350, 108, 472, 140),
+        "account_holding_pnl": (590, 47, 672, 78),
+        "account_daily_pnl": (590, 75, 685, 110),
+        "account_daily_pnl_pct": (590, 108, 685, 140),
+    }
+    parsed: dict[str, Any] = {}
+    for key, box in cells.items():
+        text = ocr_crop_text(image, scaled_box(box), scale=10 if key == "account_frozen_cash" else 8)
+        value = parse_ocr_account_decimal(text, default_decimals=2)
+        if value is None:
+            continue
+        parsed[key] = value / 100 if key == "account_daily_pnl_pct" else value
+    numeric_count = len([key for key in parsed if key in ACCOUNT_SUMMARY_KEYS])
+    if numeric_count < 5:
+        return {}
+    parsed["account_snapshot_at"] = now_iso()
+    return parsed
+
+
 def normalize_position_payload(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     for item in items:
@@ -1766,7 +1845,9 @@ def recognize_positions(body: dict[str, Any], user_id: str = LEGACY_OWNER_ID) ->
     warnings: list[str] = []
     engine = None
     text = str(body.get("text") or "")
+    summary_text = text
     table_positions: list[dict[str, Any]] = []
+    layout_summary: dict[str, Any] = {}
     if not text and body.get("image_data"):
         image_bytes, decode_err = image_bytes_from_data_uri(str(body.get("image_data")))
         if decode_err or image_bytes is None:
@@ -1775,18 +1856,28 @@ def recognize_positions(body: dict[str, Any], user_id: str = LEGACY_OWNER_ID) ->
             table_positions, table_text, table_warnings = recognize_broker_table_positions(image_bytes)
             warnings.extend(table_warnings)
             if table_positions:
+                layout_summary = recognize_broker_account_summary(image_bytes)
                 text = table_text
                 engine = "broker-table-windows-ocr"
+                full_text, full_engine, full_err = ocr_text_from_image_data(str(body.get("image_data")))
+                if full_text:
+                    summary_text = full_text
+                    text = f"{full_text}\n{table_text}".strip()
+                elif full_err:
+                    warnings.append(f"资金汇总OCR失败: {full_err}")
             else:
                 text, engine, err = ocr_text_from_image_data(str(body.get("image_data")))
                 if err:
                     warnings.append(err)
                 text = text or ""
+                summary_text = text
     account_summary = normalize_account_summary_payload(body.get("account_summary") or {})
-    if text:
-        parsed_summary = parse_account_summary_text(text)
+    if summary_text or text:
+        parsed_summary = parse_account_summary_text(f"{summary_text}\n{text}")
         if parsed_summary:
             account_summary.update(parsed_summary)
+    if layout_summary:
+        account_summary.update(layout_summary)
     if body.get("positions"):
         positions = normalize_position_payload(body.get("positions") or [])
     elif table_positions:
@@ -1804,6 +1895,8 @@ def recognize_positions(body: dict[str, Any], user_id: str = LEGACY_OWNER_ID) ->
                 positions.append(item)
                 seen.add(item["symbol"])
         positions = normalize_position_payload(positions)
+    has_stock_position = any((item.get("asset_type") or "stock") == "stock" for item in positions)
+    should_store_account_summary = bool(account_summary) and (bool(body.get("account_summary")) or bool(layout_summary) or has_stock_position)
     imported = 0
     imported_settings = 0
     if body.get("apply"):
@@ -1814,7 +1907,7 @@ def recognize_positions(body: dict[str, Any], user_id: str = LEGACY_OWNER_ID) ->
                 DB.execute("INSERT OR IGNORE INTO watchlist(owner_id,symbol,name) VALUES(?,?,?)", (user_id, item["symbol"], item.get("name", "")))
                 quote_refresh_needed = True
             imported += 1
-        if account_summary:
+        if should_store_account_summary:
             DB.set_settings(account_summary, user_id)
             imported_settings = len([key for key in account_summary if key in ACCOUNT_SUMMARY_KEYS])
         if imported or imported_settings:
@@ -3070,15 +3163,49 @@ def normalize_account_summary_payload(payload: dict[str, Any] | None) -> dict[st
     return out
 
 
+def extract_account_summary_value(compact: str, label: str) -> float | None:
+    idx = compact.find(label)
+    if idx < 0:
+        return None
+    start = idx + len(label)
+    if start < len(compact) and compact[start] in {"(", "（"}:
+        close = ")" if compact[start] == "(" else "）"
+        close_idx = compact.find(close, start + 1)
+        if close_idx > start:
+            start = close_idx + 1
+    tail = compact[start:start + 80]
+    tail = tail.translate(str.maketrans({
+        "S": "5", "s": "5", "$": "5",
+        "O": "0", "o": "0", "D": "0", "Q": "0",
+        "I": "1", "l": "1", "|": "1",
+        "B": "8", "Z": "2", "G": "6",
+        "一": "-", "—": "-", "−": "-", "－": "-",
+    }))
+    matches = list(re.finditer(r"[-+]?\d+(?:\.\d+)?%?", tail))
+    if not matches:
+        return None
+    values: list[tuple[str, float]] = []
+    for item in matches:
+        raw = item.group(0).rstrip("%")
+        value = safe_float(raw)
+        if value is not None:
+            values.append((raw, value))
+    if not values:
+        return None
+    if len(values) > 1 and values[0][0] in {"0", "+0", "-0"}:
+        return values[1][1]
+    return values[0][1]
+
+
 def parse_account_summary_text(text: str) -> dict[str, Any]:
     compact = compact_ocr_text(text)
     labels = {
         "account_cash_balance": ["资金余额"],
-        "account_withdrawable_cash": ["可取金额"],
+        "account_withdrawable_cash": ["可取金额", "可取"],
         "account_frozen_cash": ["冻结金额"],
-        "account_available_cash": ["可用金额"],
-        "account_stock_market_value": ["股票市值", "证券市值"],
-        "account_total_asset": ["总资产", "资产总计"],
+        "account_available_cash": ["可用金额", "可用转账"],
+        "account_stock_market_value": ["股票市值", "证券市值", "证券总资产"],
+        "account_total_asset": ["总资产", "资产总计", "总资产人民币"],
         "account_holding_pnl": ["持仓盈亏", "持仓总盈亏"],
         "account_daily_pnl": ["当日盈亏", "今日盈亏"],
         "account_daily_pnl_pct": ["当日盈亏比", "今日盈亏比"],
@@ -3086,10 +3213,18 @@ def parse_account_summary_text(text: str) -> dict[str, Any]:
     parsed: dict[str, Any] = {}
     for key, candidates in labels.items():
         for label in candidates:
-            match = re.search(re.escape(label) + r"[:：]?\s*([-+]?\d+(?:\.\d+)?)%?", compact)
+            value = extract_account_summary_value(compact, label)
+            if value is not None:
+                parsed[key] = value
+                break
+            match = re.search(re.escape(label) + r"(?:\([^)]*\)|（[^）]*）)?(?:[^\d+\-]{0,8})?([-+]?\d+(?:\.\d+)?)%?", compact)
             if match:
                 parsed[key] = match.group(1)
                 break
+    if "account_available_cash" not in parsed:
+        value = extract_account_summary_value(compact, "可用")
+        if value is not None:
+            parsed["account_available_cash"] = value
     summary = normalize_account_summary_payload(parsed)
     if "account_daily_pnl_pct" in parsed:
         pct_value = safe_float(parsed.get("account_daily_pnl_pct"))
@@ -3141,6 +3276,23 @@ def account_summary_from_settings(settings: dict[str, Any], market_value: float,
         "daily_pnl_pct": daily_pnl_pct,
         "snapshot_at": settings.get("account_snapshot_at") or "",
         "source": "ACCOUNT_SNAPSHOT" if safe_float(settings.get("account_total_asset")) is not None else "SYSTEM_ESTIMATE",
+    }
+
+
+def portfolio_account_bases(account_summary: dict[str, Any], stock_market_value: float, non_stock_market_value: float, configured_total: float) -> dict[str, float]:
+    stock_base = safe_float(account_summary.get("total_asset"))
+    if not stock_base or stock_base <= 0:
+        stock_base = configured_total if configured_total > 0 else stock_market_value + non_stock_market_value
+    overall_base = stock_base
+    if account_summary.get("source") == "ACCOUNT_SNAPSHOT":
+        overall_base = stock_base + non_stock_market_value
+    elif configured_total > 0:
+        overall_base = configured_total
+    elif stock_market_value + non_stock_market_value > 0:
+        overall_base = stock_market_value + non_stock_market_value
+    return {
+        "stock_base": float(stock_base or 0),
+        "overall_base": float(overall_base or 0),
     }
 
 
@@ -3330,6 +3482,8 @@ def portfolio(user_id: str = LEGACY_OWNER_ID) -> dict[str, Any]:
     positions = DB.all("SELECT * FROM positions WHERE owner_id=? ORDER BY symbol", (user_id,))
     raw_result = []
     market_value = 0.0
+    stock_market_value = 0.0
+    non_stock_market_value = 0.0
     cost_value = 0.0
     for p in positions:
         v = DB.one("SELECT * FROM quote_validation WHERE symbol=?", (p["symbol"],)) or {}
@@ -3352,6 +3506,10 @@ def portfolio(user_id: str = LEGACY_OWNER_ID) -> dict[str, Any]:
         pnl = mv - cv if mv is not None else None
         pnl_pct = pnl/cv if pnl is not None and cv else None
         market_value += mv or 0
+        if asset_type == "stock":
+            stock_market_value += mv or 0
+        else:
+            non_stock_market_value += mv or 0
         cost_value += cv
         item = {**p, "current_price": current, "market_value": mv, "cost_value": cv,
                 "unrealized_pnl": pnl, "pnl_pct": pnl_pct, "portfolio_weight": None,
@@ -3359,13 +3517,19 @@ def portfolio(user_id: str = LEGACY_OWNER_ID) -> dict[str, Any]:
         item["effective_stop_loss"] = inferred_stop_loss(item, s)
         raw_result.append(item)
     account_summary = account_summary_from_settings(s, market_value, cost_value, configured_total)
-    capital_base = float(account_summary.get("total_asset") or configured_total or 0)
+    reported_stock_market_value = safe_float(account_summary.get("stock_market_value"), stock_market_value) or stock_market_value
+    bases = portfolio_account_bases(account_summary, stock_market_value, non_stock_market_value, configured_total)
+    stock_capital_base = bases["stock_base"]
+    capital_base = bases["overall_base"]
     result = []
     themes: dict[str, float] = {}
     profile = RISK_PROFILES.get(s.get("risk_profile"), RISK_PROFILES["balanced"])
     for item in raw_result:
         mv = item.get("market_value") or 0
-        item["portfolio_weight"] = mv / capital_base if capital_base and item.get("market_value") is not None else None
+        item_asset_type = item.get("asset_type") or "stock"
+        item_base = stock_capital_base if item_asset_type == "stock" else capital_base
+        item["portfolio_weight"] = mv / item_base if item_base and item.get("market_value") is not None else None
+        item["weight_base"] = "STOCK_ACCOUNT" if item_asset_type == "stock" else "TOTAL_PORTFOLIO"
         themes[item["theme"]] = themes.get(item["theme"], 0) + mv
         item["position_action"] = position_action_for(item, profile)
         item["daily_trade_plan"] = daily_trade_plan_for_position(item, s, item["position_action"])
@@ -3373,11 +3537,15 @@ def portfolio(user_id: str = LEGACY_OWNER_ID) -> dict[str, Any]:
     return {
         "settings": s, "positions": result, "position_count": len(result),
         "total_market_value": market_value, "total_cost_value": cost_value,
+        "stock_position_market_value": stock_market_value,
+        "non_stock_market_value": non_stock_market_value,
+        "reported_stock_market_value": reported_stock_market_value,
         "unrealized_pnl": market_value-cost_value if result else 0,
-        "invested_weight": market_value/capital_base if capital_base else 0,
-        "stock_invested_weight": (account_summary.get("stock_market_value") or market_value) / capital_base if capital_base else 0,
+        "invested_weight": (reported_stock_market_value + non_stock_market_value)/capital_base if capital_base else 0,
+        "stock_invested_weight": reported_stock_market_value/stock_capital_base if stock_capital_base else 0,
         "estimated_cash": account_summary.get("cash_balance"),
         "capital_base": capital_base,
+        "stock_capital_base": stock_capital_base,
         "account_summary": account_summary,
         "theme_exposure": {k: v/capital_base for k, v in themes.items()} if capital_base else {}
     }
